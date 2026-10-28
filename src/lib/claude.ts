@@ -77,6 +77,8 @@ export class AnthropicError extends Error {
   }
 }
 
+const AUTO_ONLY_MODELS = new Set<string>();
+
 export class Claude {
   constructor(private apiKey: string) {}
 
@@ -111,8 +113,9 @@ export class Claude {
   }
 
   // 모델마다 강제 tool_choice({type:"tool"})를 지원하지 않는 경우가 있어,
-  // 거절되면 이 모델은 auto 모드로 기억하고 다시 호출한다.
-  private autoOnly = new Set<string>();
+  // 거절되면 이 모델은 auto 모드로 기억하고 다시 호출한다. Claude 인스턴스는 리뷰마다
+  // 새로 만들어지므로 모듈 단위로 기억한다.
+  private autoOnly = AUTO_ONLY_MODELS;
 
   private async callMessages(model: string, system: string, user: string, forced: boolean) {
     const res = await fetch(`${API}/messages`, {
@@ -131,7 +134,7 @@ export class Claude {
     });
     await this.check(res);
     return (await res.json()) as {
-      content: Array<{ type: string; name?: string; input?: unknown; text?: string }>;
+      content: Block[];
       stop_reason: string;
     };
   }
@@ -149,21 +152,13 @@ export class Claude {
         throw e;
       }
     }
-    const tool = json.content.find((c) => c.type === "tool_use" && c.name === REVIEW_TOOL.name);
-    let input: RawReview | undefined = tool?.input as RawReview | undefined;
+    const input = extractReview(json.content);
     if (!input) {
-      // auto 모드에서 도구 대신 텍스트로 JSON을 준 경우 대비
-      const text = json.content.filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
-      const m = text.match(/\{[\s\S]*\}/);
-      if (m) {
-        try {
-          input = JSON.parse(m[0]);
-        } catch {
-          /* not json */
-        }
-      }
+      const blocks = json.content
+        .map((c) => (c.type === "tool_use" ? `tool_use:${c.name}(${describeInput(c.input)})` : c.type))
+        .join(", ");
+      throw new Error(`Claude 응답에 리뷰 결과가 없습니다 (stop_reason=${json.stop_reason}, blocks=[${blocks}])`);
     }
-    if (!input) throw new Error(`Claude 응답에 리뷰 결과가 없습니다 (stop_reason=${json.stop_reason})`);
     return {
       summary: String(input.summary ?? ""),
       comments: Array.isArray(input.comments) ? input.comments : [],
@@ -179,4 +174,54 @@ interface RawReview {
   summary?: string;
   comments?: ModelComment[];
   resolved_threads?: ResolvedThread[];
+}
+
+type Block = { type: string; name?: string; input?: unknown; text?: string };
+
+/** Accepts an object or a JSON string; returns it only if it looks like a review. */
+function asReview(v: unknown): RawReview | undefined {
+  let o = v;
+  if (typeof o === "string") {
+    try {
+      o = JSON.parse(o);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!o || typeof o !== "object") return undefined;
+  const r = o as Record<string, unknown>;
+  // Some models wrap the arguments one level deeper ({"input": {...}} / {"review": {...}}).
+  for (const k of ["input", "review", "arguments"]) {
+    if (r[k] && typeof r[k] === "object" && !("summary" in r) && !("comments" in r)) return asReview(r[k]);
+  }
+  for (const k of ["comments", "resolved_threads"]) {
+    if (typeof r[k] === "string") {
+      try {
+        r[k] = JSON.parse(r[k] as string);
+      } catch {
+        /* leave as is */
+      }
+    }
+  }
+  return typeof r.summary === "string" || Array.isArray(r.comments) ? (r as RawReview) : undefined;
+}
+
+/** Finds the review in a response: the named tool call, any other tool call, then JSON in text. */
+export function extractReview(content: Block[]): RawReview | undefined {
+  const tools = content.filter((c) => c.type === "tool_use");
+  const named = tools.filter((c) => c.name === REVIEW_TOOL.name);
+  for (const c of [...named, ...tools.filter((c) => c.name !== REVIEW_TOOL.name)]) {
+    const r = asReview(c.input);
+    if (r) return r;
+  }
+  const text = content.filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
+  const m = text.match(/\{[\s\S]*\}/);
+  return m ? asReview(m[0]) : undefined;
+}
+
+function describeInput(v: unknown): string {
+  if (v === null || v === undefined) return "없음";
+  if (typeof v === "string") return `문자열 ${v.length}자`;
+  if (typeof v === "object") return `keys=${Object.keys(v as object).join("|") || "비어 있음"}`;
+  return typeof v;
 }
