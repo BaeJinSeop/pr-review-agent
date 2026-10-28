@@ -1,0 +1,92 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1d2330;
+  --muted: #6b7385;
+  --border: #dde1e8;
+  --accent: #2f6fe4;
+  --ok: #1f8a4c;
+  --bad: #c43c3c;
+  --warn: #b7791f;
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", "Malgun Gothic", sans-serif;
+  font-size: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181d;
+    --panel: #1f232a;
+    --text: #e4e7ec;
+    --muted: #8d95a5;
+    --border: #2f3540;
+    --accent: #5b8ff0;
+    --ok: #4cc27f;
+    --bad: #ef6b6b;
+    --warn: #e2a64a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+nav.tabs {
+  display: flex; gap: 4px; align-items: center; padding: 10px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 2;
+}
+nav.tabs .brand { font-weight: 700; margin-right: 16px; }
+nav.tabs button { background: transparent; color: var(--muted); border: none; }
+nav.tabs button.active { color: var(--text); background: var(--bg); }
+main { padding: 16px 20px 40px; max-width: 1100px; }
+h3 { margin: 22px 0 8px; font-size: 15px; }
+button {
+  font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff; white-space: nowrap;
+}
+button.ghost { background: transparent; color: var(--text); border-color: var(--border); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: 0.45; cursor: default; }
+input, select, textarea {
+  font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); min-width: 0;
+}
+textarea { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+.row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.row input:not([type="checkbox"]), .row select { flex: 1; }
+.row.between { justify-content: space-between; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field { margin: 10px 0 14px; }
+.field label { display: block; font-weight: 600; margin-bottom: 4px; }
+.field .grid2 input, .grid2 input { width: 100%; }
+label.check { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.hint { color: var(--muted); font-size: 12.5px; font-weight: normal; margin: 4px 0; }
+.ok { color: var(--ok); font-weight: 600; }
+.bad { color: var(--bad); font-weight: 600; }
+.warn { color: var(--warn); font-weight: 600; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; }
+.status .label { display: block; color: var(--muted); font-size: 12px; }
+.log {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  height: 160px; overflow: auto; font-size: 12px; margin: 0; white-space: pre-wrap;
+}
+.hist { margin: 6px 0; padding: 8px 12px; }
+.hist summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.hist .title { flex: 1; min-width: 200px; }
+.hist .meta { color: var(--muted); font-size: 12px; }
+.hist pre { white-space: pre-wrap; font-size: 12.5px; margin: 8px 0 2px; }
+.hist pre.err { color: var(--bad); }
+a { color: var(--accent); text-decoration: none; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); }
+.badge.posted { color: var(--ok); border-color: var(--ok); }
+.badge.dry-run { color: var(--warn); border-color: var(--warn); }
+.badge.error { color: var(--bad); border-color: var(--bad); }
+table.repos { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+table.repos th, table.repos td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+table.repos th { font-size: 12px; color: var(--muted); font-weight: 600; }
+table.repos td:first-child { width: 48px; text-align: center; }
+table.repos td:last-child input { width: 100%; }
+#toast {
+  position: fixed; right: 16px; bottom: 16px; padding: 10px 14px; border-radius: 8px;
+  color: #fff; max-width: 480px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2); z-index: 10;
+}
+#toast.ok { background: var(--ok); }
+#toast.err { background: var(--bad); }

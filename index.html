@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PR Review Agent</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <nav class="tabs">
+      <div class="brand">PR Review Agent</div>
+      <button data-tab="dashboard" class="active">대시보드</button>
+      <button data-tab="repos">레포</button>
+      <button data-tab="settings">설정</button>
+    </nav>
+    <main>
+      <section id="tab-dashboard"></section>
+      <section id="tab-repos" hidden></section>
+      <section id="tab-settings" hidden></section>
+    </main>
+    <div id="toast" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
