@@ -67,6 +67,11 @@ const oneLine = (body: string, max: number) =>
   body.replace(AGENT_MARKER, "").replace(/\s+/g, " ").trim().slice(0, max);
 const where = (t: GhThread) => (t.line === null ? `${t.path} (위치 변경됨)` : `${t.path}:${t.line}`);
 
+interface FixedThread {
+  thread: GhThread;
+  reason: string;
+}
+
 /** Open threads get short ids the model can return; resolved ones are context only. */
 function priorSection(open: Map<string, GhThread>, closed: GhThread[]): string {
   let out = "";
@@ -127,10 +132,19 @@ function buildReviewBody(
   sha: string,
   scope: ReviewScope,
   duplicates: number,
-  resolved: number,
+  fixed: FixedThread[],
+  autoResolved: boolean,
 ): string {
   const title = scope.mode === "incremental" ? "## 🤖 PR Review Agent (추가 커밋 리뷰)" : "## 🤖 PR Review Agent";
   const parts = [`${title}\n\n${summary.trim()}`];
+  if (fixed.length) {
+    const heading = autoResolved
+      ? `### ✅ 수정 확인된 이전 지적 (${fixed.length}개, resolve 처리함)`
+      : `### ✅ 수정된 것으로 보이는 이전 지적 (${fixed.length}개, 자동 resolve 꺼져 있음)`;
+    parts.push(
+      heading + "\n" + fixed.map(({ thread, reason }) => `- \`${where(thread)}\` ${oneLine(thread.body, 80)}\n  → ${reason}`).join("\n"),
+    );
+  }
   if (stray.length) {
     parts.push(
       "### 기타 지적사항\n" +
@@ -141,7 +155,7 @@ function buildReviewBody(
   meta.push(scope.mode === "incremental" ? `range: ${short(scope.from!)}..${short(sha)}` : `commit: ${short(sha)}`);
   if (diff.skipped.length) meta.push(`제외 파일 ${diff.skipped.length}개`);
   if (duplicates) meta.push(`중복 지적 ${duplicates}개 생략`);
-  if (resolved) meta.push(`이전 지적 ${resolved}개 수정 확인`);
+  if (fixed.length) meta.push(`이전 지적 ${fixed.length}개 수정 확인`);
   parts.push(`<sub>${meta.join(" · ")}</sub>`);
   return parts.join("\n\n");
 }
@@ -270,9 +284,9 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
 
     // Only trust "fixed" for threads whose file the model actually saw in this diff.
     const seen = new Set(diff.files.map((f) => f.path));
-    const toResolve = result.resolved
+    const toResolve: FixedThread[] = result.resolved
       .map((r) => ({ thread: open.get(r.id), reason: r.reason }))
-      .filter((r): r is { thread: GhThread; reason: string } => !!r.thread && seen.has(r.thread.path));
+      .filter((r): r is FixedThread => !!r.thread && seen.has(r.thread.path));
 
     const fresh = result.comments.filter((c) => !isDuplicate(c, prior));
     const duplicates = result.comments.length - fresh.length;
@@ -294,48 +308,55 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
     entry.commentCount = fresh.length;
     entry.duplicateCount = duplicates;
     const dupNote = duplicates ? `, 중복 ${duplicates}개 생략` : "";
-    const willResolve = settings.autoResolve && !settings.dryRun ? toResolve.length : 0;
+    const autoResolve = settings.autoResolve && !settings.dryRun;
 
     if (settings.dryRun) {
       entry.status = "dry-run";
       const fixNote = toResolve.length ? `, 수정 확인 ${toResolve.length}개` : "";
       log(`${key} 드라이런: 코멘트 ${fresh.length}개${dupNote}${fixNote} (게시·resolve 안 함)`);
-    } else if (fresh.length === 0 && (scope.mode === "incremental" || reviewed[key] === pr.head.sha)) {
-      // A follow-up push, or a re-run on an already reviewed commit, with nothing new to say
-      // would only add a second summary to the PR. Fixed threads still get resolved below.
-      entry.status = "skipped";
-      log(`${key} 새 지적 없음${dupNote} → 리뷰 게시 안 함 (요약은 이력에 저장)`);
+      for (const { thread, reason } of toResolve) log(`${key}   수정 확인 ${where(thread)}: ${reason}`);
     } else {
-      const body = (s: ModelComment[]) =>
-        buildReviewBody(result.summary, s, diff, settings.model, pr.head.sha, scope, duplicates, willResolve);
-      try {
-        await gh.createReview(repo, pr.number, pr.head.sha, body(stray), anchored);
-      } catch (e) {
-        // 422 = GitHub could not resolve a line; retry with everything in the body.
-        if (!(e instanceof GitHubError && e.status === 422) || anchored.length === 0) throw e;
-        log(`${key} 라인 코멘트 실패(422), 본문으로 합쳐 재시도`);
-        await gh.createReview(repo, pr.number, pr.head.sha, body(fresh), []);
-      }
-      entry.status = "posted";
-      log(`${key} 리뷰 게시 완료: 코멘트 ${fresh.length}개${dupNote}`);
-    }
-
-    // Resolve threads only after the review itself succeeded; one failure does not stop the rest.
-    if (willResolve) {
-      let ok = 0;
-      for (const { thread, reason } of toResolve) {
-        try {
-          await gh.replyAndResolve(
-            thread.id,
-            `✅ 수정 확인: ${reason}\n\n<sub>commit ${short(pr.head.sha)} 기준 · PR Review Agent</sub>\n\n${AGENT_MARKER}`,
-          );
-          ok++;
-        } catch (e) {
-          log(`${key} ${where(thread)} resolve 실패: ${e instanceof Error ? e.message : e}`);
+      // Resolve first so the review body lists only threads that were actually resolved.
+      // One failure does not stop the rest.
+      const fixed: FixedThread[] = [];
+      if (autoResolve) {
+        for (const f of toResolve) {
+          try {
+            await gh.replyAndResolve(
+              f.thread.id,
+              `✅ 수정 확인: ${f.reason}\n\n<sub>commit ${short(pr.head.sha)} 기준 · PR Review Agent</sub>\n\n${AGENT_MARKER}`,
+            );
+            fixed.push(f);
+          } catch (e) {
+            log(`${key} ${where(f.thread)} resolve 실패: ${e instanceof Error ? e.message : e}`);
+          }
         }
+        entry.resolvedCount = fixed.length;
+        if (fixed.length) log(`${key} 수정 확인된 이전 지적 ${fixed.length}개 resolve`);
+      } else {
+        fixed.push(...toResolve);
       }
-      entry.resolvedCount = ok;
-      if (ok) log(`${key} 수정 확인된 이전 지적 ${ok}개 resolve`);
+
+      if (fresh.length === 0 && fixed.length === 0 && (scope.mode === "incremental" || reviewed[key] === pr.head.sha)) {
+        // A follow-up push, or a re-run on an already reviewed commit, with nothing new to say
+        // would only add a second summary to the PR.
+        entry.status = "skipped";
+        log(`${key} 새 지적·수정 확인 없음${dupNote} → 리뷰 게시 안 함 (요약은 이력에 저장)`);
+      } else {
+        const body = (s: ModelComment[]) =>
+          buildReviewBody(result.summary, s, diff, settings.model, pr.head.sha, scope, duplicates, fixed, autoResolve);
+        try {
+          await gh.createReview(repo, pr.number, pr.head.sha, body(stray), anchored);
+        } catch (e) {
+          // 422 = GitHub could not resolve a line; retry with everything in the body.
+          if (!(e instanceof GitHubError && e.status === 422) || anchored.length === 0) throw e;
+          log(`${key} 라인 코멘트 실패(422), 본문으로 합쳐 재시도`);
+          await gh.createReview(repo, pr.number, pr.head.sha, body(fresh), []);
+        }
+        entry.status = "posted";
+        const fixNote = fixed.length ? `, 수정 확인 ${fixed.length}개` : "";
+        log(`${key} 리뷰 게시 완료: 코멘트 ${fresh.length}개${dupNote}${fixNote}`);
+      }
     }
     await config.markReviewed(key, pr.head.sha);
   } catch (e) {
