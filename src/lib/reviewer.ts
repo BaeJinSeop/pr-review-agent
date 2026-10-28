@@ -164,8 +164,36 @@ export interface ReviewOptions {
   full?: boolean;
 }
 
+/** PRs with a review in progress. A second request for the same PR (double click, or a
+ *  poll overlapping a manual review) is dropped instead of posting a second review. */
+const inFlight = new Set<string>();
+
 /** Review one PR at its current head and (unless dry-run) post a COMMENT review. */
 export async function reviewPull(repo: string, pr: GhPull, log: LogFn, opts: ReviewOptions = {}): Promise<HistoryEntry> {
+  const key = prKey(repo, pr.number);
+  if (inFlight.has(key)) {
+    log(`${key} 이미 리뷰 진행 중 → 중복 요청 무시`);
+    return {
+      time: new Date().toISOString(),
+      repo,
+      number: pr.number,
+      title: pr.title,
+      url: pr.html_url,
+      sha: pr.head.sha,
+      status: "skipped",
+      commentCount: 0,
+      summary: "이미 리뷰가 진행 중입니다.",
+    };
+  }
+  inFlight.add(key);
+  try {
+    return await reviewPullLocked(repo, pr, log, opts);
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: ReviewOptions): Promise<HistoryEntry> {
   const settings = await config.settings();
   const key = prKey(repo, pr.number);
   const entry: HistoryEntry = {
@@ -239,10 +267,11 @@ export async function reviewPull(repo: string, pr: GhPull, log: LogFn, opts: Rev
     if (settings.dryRun) {
       entry.status = "dry-run";
       log(`${key} 드라이런: 코멘트 ${fresh.length}개${dupNote} (게시 안 함)`);
-    } else if (scope.mode === "incremental" && fresh.length === 0) {
-      // A follow-up push with nothing new to say would only add noise to the PR.
+    } else if (fresh.length === 0 && (scope.mode === "incremental" || reviewed[key] === pr.head.sha)) {
+      // A follow-up push, or a re-run on an already reviewed commit, with nothing new to say
+      // would only add a second summary to the PR.
       entry.status = "skipped";
-      log(`${key} 추가 커밋에 새 지적 없음${dupNote} → 게시 안 함 (요약은 이력에 저장)`);
+      log(`${key} 새 지적 없음${dupNote} → 게시 안 함 (요약은 이력에 저장)`);
     } else {
       const body = (s: ModelComment[]) =>
         buildReviewBody(result.summary, s, diff, settings.model, pr.head.sha, scope, duplicates);

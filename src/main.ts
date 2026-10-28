@@ -98,18 +98,25 @@ async function renderDashboard() {
     await renderDashboard();
   };
   $("#review-url").onclick = async () => {
+    const btn = $<HTMLButtonElement>("#review-url");
+    if (btn.disabled) return;
     const parsed = parsePullUrl($<HTMLInputElement>("#pr-url").value);
     if (!parsed) return toast("PR URL 형식이 아닙니다.", "err");
+    btn.disabled = true;
+    btn.textContent = "리뷰 중...";
     try {
       const { gh } = await clients();
       const pr = await gh.getPull(parsed.repo, parsed.number);
       const r = await reviewPull(parsed.repo, pr, log, { full: true });
       toast(
-        r.status === "error" ? `실패: ${r.error}` : r.status === "skipped" ? "건너뜀 (이력 확인)" : "리뷰 완료",
+        r.status === "error" ? `실패: ${r.error}` : r.status === "skipped" ? `건너뜀: ${r.summary}` : "리뷰 완료",
         r.status === "error" ? "err" : "ok",
       );
     } catch (e) {
       toast(errMsg(e), "err");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "이 PR 리뷰";
     }
     await renderHistory();
   };
