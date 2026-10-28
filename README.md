@@ -35,10 +35,23 @@ CI=true npm run tauri build   # .app + .dmg (CI=true: Finder 레이아웃 AppleS
 
 산출물: `src-tauri/target/release/bundle/dmg/`
 
+## 다운로드 / 릴리스
+
+[Releases](https://github.com/js8ae/pr-review-agent/releases)에서 macOS universal DMG와 Windows 설치 파일을 받을 수 있습니다.
+서명·공증하지 않은 빌드라 처음 실행할 때 OS가 막습니다.
+
+- macOS: 시스템 설정 → 개인정보 보호 및 보안 → "그래도 열기", 또는 `xattr -dr com.apple.quarantine "/Applications/PR Review Agent.app"`
+- Windows: SmartScreen 경고에서 "추가 정보 → 실행"
+
+릴리스 만드는 법 (`.github/workflows/release.yml`):
+
+1. `src-tauri/tauri.conf.json`의 `version`을 올리고 커밋·푸시
+2. `git tag v<버전> && git push origin v<버전>` (태그와 version이 다르면 workflow가 실패함)
+3. Actions가 끝나면 Releases의 초안을 확인하고 Publish
+
 ## 배포 메모
 
-- 현재 빌드는 ad-hoc 서명 → 다른 맥에서는 처음 실행 시 우클릭 → 열기 (또는 `xattr -dr com.apple.quarantine`)
-- 팀 배포: Apple Developer ID 서명 + 공증, Windows는 GitHub Actions `windows-latest`에서 MSI/NSIS 빌드
+- 경고 없이 열리게 하려면: Apple Developer ID 서명 + 공증(Apple Developer Program 연 $99), Windows 코드 서명 인증서
 
 ## 라이선스
 
