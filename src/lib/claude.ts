@@ -64,6 +64,9 @@ export class Claude {
     return {
       "x-api-key": this.apiKey,
       "anthropic-version": VERSION,
+      // Tauri http 플러그인이 웹뷰 Origin 헤더를 붙여 Anthropic이 브라우저 CORS 요청으로 판단함.
+      // 실제 요청은 로컬 앱의 Rust 쪽에서 나가고 키가 공개 웹페이지에 노출되지 않으므로 허용.
+      "anthropic-dangerous-direct-browser-access": "true",
       "content-type": "application/json",
     };
   }
@@ -87,29 +90,63 @@ export class Claude {
     return json.data;
   }
 
-  async review(model: string, system: string, user: string): Promise<ModelReview> {
+  // 모델마다 강제 tool_choice({type:"tool"})를 지원하지 않는 경우가 있어,
+  // 거절되면 이 모델은 auto 모드로 기억하고 다시 호출한다.
+  private autoOnly = new Set<string>();
+
+  private async callMessages(model: string, system: string, user: string, forced: boolean) {
     const res = await fetch(`${API}/messages`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({
         model,
         max_tokens: 8192,
-        system,
+        system: forced
+          ? system
+          : `${system}\n\n반드시 ${REVIEW_TOOL.name} 도구를 정확히 한 번 호출해서 결과를 제출하라. 도구 호출 외의 텍스트 답변은 하지 마라.`,
         messages: [{ role: "user", content: user }],
         tools: [REVIEW_TOOL],
-        tool_choice: { type: "tool", name: REVIEW_TOOL.name },
+        tool_choice: forced ? { type: "tool", name: REVIEW_TOOL.name } : { type: "auto" },
       }),
     });
     await this.check(res);
-    const json = (await res.json()) as {
-      content: Array<{ type: string; name?: string; input?: ModelReview }>;
+    return (await res.json()) as {
+      content: Array<{ type: string; name?: string; input?: ModelReview; text?: string }>;
       stop_reason: string;
     };
+  }
+
+  async review(model: string, system: string, user: string): Promise<ModelReview> {
+    let json;
+    const forced = !this.autoOnly.has(model);
+    try {
+      json = await this.callMessages(model, system, user, forced);
+    } catch (e) {
+      if (forced && e instanceof AnthropicError && e.status === 400 && /tool_choice/.test(e.message)) {
+        this.autoOnly.add(model);
+        json = await this.callMessages(model, system, user, false);
+      } else {
+        throw e;
+      }
+    }
     const tool = json.content.find((c) => c.type === "tool_use" && c.name === REVIEW_TOOL.name);
-    if (!tool?.input) throw new Error(`Claude 응답에 리뷰 결과가 없습니다 (stop_reason=${json.stop_reason})`);
+    let input: Partial<ModelReview> | undefined = tool?.input;
+    if (!input) {
+      // auto 모드에서 도구 대신 텍스트로 JSON을 준 경우 대비
+      const text = json.content.filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          input = JSON.parse(m[0]);
+        } catch {
+          /* not json */
+        }
+      }
+    }
+    if (!input) throw new Error(`Claude 응답에 리뷰 결과가 없습니다 (stop_reason=${json.stop_reason})`);
     return {
-      summary: String(tool.input.summary ?? ""),
-      comments: Array.isArray(tool.input.comments) ? tool.input.comments : [],
+      summary: String(input.summary ?? ""),
+      comments: Array.isArray(input.comments) ? input.comments : [],
     };
   }
 }

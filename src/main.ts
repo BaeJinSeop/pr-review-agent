@@ -103,8 +103,11 @@ async function renderDashboard() {
     try {
       const { gh } = await clients();
       const pr = await gh.getPull(parsed.repo, parsed.number);
-      const r = await reviewPull(parsed.repo, pr, log);
-      toast(r.status === "error" ? `실패: ${r.error}` : "리뷰 완료", r.status === "error" ? "err" : "ok");
+      const r = await reviewPull(parsed.repo, pr, log, { full: true });
+      toast(
+        r.status === "error" ? `실패: ${r.error}` : r.status === "skipped" ? "건너뜀 (이력 확인)" : "리뷰 완료",
+        r.status === "error" ? "err" : "ok",
+      );
     } catch (e) {
       toast(errMsg(e), "err");
     }
@@ -125,7 +128,7 @@ async function renderHistory() {
     el.innerHTML = `<p class="hint">아직 리뷰 이력이 없습니다.</p>`;
     return;
   }
-  const label = { posted: "게시됨", "dry-run": "드라이런", error: "실패" } as const;
+  const label = { posted: "게시됨", "dry-run": "드라이런", skipped: "건너뜀", error: "실패" } as const;
   el.innerHTML = history
     .map(
       (h) => `
@@ -134,7 +137,7 @@ async function renderHistory() {
         <span class="badge ${h.status}">${label[h.status]}</span>
         <a href="#" data-href="${esc(h.url)}">${esc(h.repo)}#${h.number}</a>
         <span class="title">${esc(h.title)}</span>
-        <span class="meta">코멘트 ${h.commentCount} · ${esc(h.sha.slice(0, 7))} · ${fmtTime(h.time)}</span>
+        <span class="meta">${h.mode === "incremental" ? "증분 · " : ""}코멘트 ${h.commentCount}${h.duplicateCount ? ` (중복 ${h.duplicateCount} 생략)` : ""} · ${esc(h.sha.slice(0, 7))} · ${fmtTime(h.time)}</span>
       </summary>
       ${h.error ? `<pre class="err">${esc(h.error)}</pre>` : ""}
       ${h.summary ? `<pre class="summary">${esc(h.summary)}</pre>` : ""}
@@ -264,6 +267,11 @@ async function renderSettings() {
     </div>
     <label class="check"><input type="checkbox" id="dryrun" ${s.dryRun ? "checked" : ""} /> 드라이런: 리뷰만 생성하고 PR에 게시하지 않음 (이력에서 확인)</label>
     <label class="check"><input type="checkbox" id="skipexisting" ${s.skipExistingOnAdd ? "checked" : ""} /> 레포를 켤 때 이미 열려 있는 PR은 건너뛰고 새 커밋부터 리뷰</label>
+    <div class="grid2">
+      <div class="field"><label>리뷰 제외 라벨 (쉼표로 구분)</label><input type="text" id="skiplabels" value="${esc(s.skipLabels)}" /></div>
+      <div class="field"><label>리뷰 제외 작성자 (쉼표로 구분)</label><input type="text" id="skipauthors" value="${esc(s.skipAuthors)}" /></div>
+    </div>
+    <p class="hint">draft PR, 제목에 [skip review] 또는 [no review]가 있는 PR, lock/빌드/바이너리 파일만 바뀐 PR도 리뷰하지 않습니다.</p>
     <div class="field">
       <div class="row between"><label>팀 리뷰 기준 (시스템 프롬프트에 포함)</label><button class="ghost" id="reset-guide">기본값으로</button></div>
       <textarea id="guidelines" rows="10">${esc(s.guidelines)}</textarea>
@@ -337,6 +345,8 @@ async function renderSettings() {
       dryRun: $<HTMLInputElement>("#dryrun").checked,
       skipExistingOnAdd: $<HTMLInputElement>("#skipexisting").checked,
       guidelines: $<HTMLTextAreaElement>("#guidelines").value,
+      skipLabels: $<HTMLInputElement>("#skiplabels").value,
+      skipAuthors: $<HTMLInputElement>("#skipauthors").value,
     };
     await config.saveSettings(next);
     await invoke("set_poll_interval", { minutes: next.pollMinutes });

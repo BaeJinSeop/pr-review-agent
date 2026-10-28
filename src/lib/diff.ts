@@ -10,6 +10,9 @@ const SKIP_PATTERNS: RegExp[] = [
   /gradle-wrapper\.(jar|properties)$/,
 ];
 
+/** Lock files, build output, binaries: not worth sending to the model. */
+export const isNoiseFile = (filename: string) => SKIP_PATTERNS.some((p) => p.test(filename));
+
 export interface PreparedFile {
   path: string;
   status: string;
@@ -60,7 +63,7 @@ export function prepareDiff(files: GhFile[], maxChars: number): PreparedDiff {
   // Review the most-changed files first when the budget runs out.
   const sorted = [...files].sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions));
   for (const f of sorted) {
-    if (f.status === "removed" || !f.patch || SKIP_PATTERNS.some((p) => p.test(f.filename))) {
+    if (f.status === "removed" || !f.patch || isNoiseFile(f.filename)) {
       result.skipped.push(f.filename);
       continue;
     }

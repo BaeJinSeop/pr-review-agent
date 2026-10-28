@@ -1,7 +1,8 @@
 import { Claude, type ModelComment, type Severity } from "./claude";
 import { config, type HistoryEntry, type Settings } from "./config";
-import { prepareDiff, type PreparedDiff } from "./diff";
-import { GitHub, GitHubError, type GhPull, type ReviewComment } from "./github";
+import { annotatePatch, prepareDiff, type PreparedDiff } from "./diff";
+import { GitHub, GitHubError, type GhFile, type GhPull, type ReviewComment } from "./github";
+import { AGENT_MARKER, isAgentComment, isDuplicate, skipReason, type PriorComment } from "./rules";
 import { secrets } from "./secrets";
 
 const SEVERITY_LABEL: Record<Severity, string> = {
@@ -15,6 +16,8 @@ export type LogFn = (msg: string) => void;
 
 /** Automatic retries per (PR, head SHA). Manual review by URL ignores this. */
 const MAX_ATTEMPTS = 3;
+/** Prior agent comments shown to the model, newest first. */
+const MAX_PRIOR_IN_PROMPT = 40;
 
 export async function clients(): Promise<{ gh: GitHub; claude: Claude }> {
   const [token, key] = await Promise.all([secrets.get("github_token"), secrets.get("anthropic_api_key")]);
@@ -24,6 +27,7 @@ export async function clients(): Promise<{ gh: GitHub; claude: Claude }> {
 }
 
 const prKey = (repo: string, n: number) => `${repo}#${n}`;
+const short = (sha: string) => sha.slice(0, 7);
 
 function matchesBase(baseBranches: string, base: string): boolean {
   const list = baseBranches
@@ -43,25 +47,50 @@ function systemPrompt(s: Settings): string {
 - path는 diff 헤더의 파일 경로를 그대로 씁니다.
 - 실제로 문제가 되거나 개선 효과가 분명한 것만 지적합니다. 확신이 낮은 추측, 칭찬, 단순 요약은 라인 코멘트로 달지 않습니다.
 - 각 코멘트에는 왜 문제인지와 구체적인 수정 방법(가능하면 코드)을 적습니다.
+- "이전 리뷰 코멘트"가 주어지면, 그와 같은 지적은 다시 달지 않습니다. 이번 변경으로 해결된 이전 지적은 summary에 "해결됨"으로 짧게 적습니다.
+- 증분 리뷰에서는 이번에 바뀐 부분만 평가하고, PR 전체를 다시 요약하지 않습니다.
 - 지적할 것이 없으면 comments는 빈 배열로 두고 summary에 짧게 적습니다.
 
 팀 리뷰 기준:
 ${s.guidelines.trim()}`;
 }
 
-function userPrompt(pr: GhPull, repo: string, diff: PreparedDiff): string {
+interface ReviewScope {
+  mode: "full" | "incremental";
+  from?: string; // last reviewed SHA for incremental
+}
+
+function priorSection(prior: PriorComment[]): string {
+  if (prior.length === 0) return "";
+  const lines = prior
+    .slice(0, MAX_PRIOR_IN_PROMPT)
+    .map((p) => {
+      const where = p.line === null ? `${p.path} (위치 변경됨)` : `${p.path}:${p.line}`;
+      const body = p.body.replace(AGENT_MARKER, "").replace(/\s+/g, " ").trim().slice(0, 300);
+      return `- ${where} — ${body}`;
+    })
+    .join("\n");
+  return `\n\n이전 리뷰 코멘트 (이미 PR에 달려 있음, 반복 금지):\n${lines}`;
+}
+
+function userPrompt(pr: GhPull, repo: string, diff: PreparedDiff, scope: ReviewScope, prior: PriorComment[]): string {
   const body = (pr.body ?? "").slice(0, 4000);
   const files = diff.files
     .map((f) => `### ${f.path} (${f.status})\n\`\`\`diff\n${f.text}\n\`\`\``)
     .join("\n\n");
   const skipped = diff.skipped.length ? `\n\n리뷰에서 제외된 파일: ${diff.skipped.join(", ")}` : "";
+  const range =
+    scope.mode === "incremental"
+      ? `증분 리뷰: 마지막 리뷰 커밋 ${short(scope.from!)} 이후 새로 푸시된 변경만 보여줍니다 (${short(scope.from!)}..${short(pr.head.sha)}).`
+      : "전체 리뷰: PR의 전체 변경을 보여줍니다.";
   return `레포: ${repo}
 PR #${pr.number}: ${pr.title}
 작성자: ${pr.user.login}
 브랜치: ${pr.head.ref} -> ${pr.base.ref}
+${range}
 
 PR 설명:
-${body || "(없음)"}
+${body || "(없음)"}${priorSection(prior)}
 
 변경 사항 (라인 번호는 새 파일 기준):
 
@@ -69,7 +98,7 @@ ${files}${skipped}`;
 }
 
 function formatComment(c: ModelComment): string {
-  return `**${SEVERITY_LABEL[c.severity] ?? c.severity}** ${c.body}`;
+  return `**${SEVERITY_LABEL[c.severity] ?? c.severity}** ${c.body}\n\n${AGENT_MARKER}`;
 }
 
 function buildReviewBody(
@@ -78,22 +107,67 @@ function buildReviewBody(
   diff: PreparedDiff,
   model: string,
   sha: string,
+  scope: ReviewScope,
+  duplicates: number,
 ): string {
-  const parts = [`## 🤖 PR Review Agent\n\n${summary.trim()}`];
+  const title = scope.mode === "incremental" ? "## 🤖 PR Review Agent (추가 커밋 리뷰)" : "## 🤖 PR Review Agent";
+  const parts = [`${title}\n\n${summary.trim()}`];
   if (stray.length) {
     parts.push(
-      "### 기타 지적사항\n" + stray.map((c) => `- \`${c.path}:${c.line}\` ${formatComment(c)}`).join("\n"),
+      "### 기타 지적사항\n" +
+        stray.map((c) => `- \`${c.path}:${c.line}\` **${SEVERITY_LABEL[c.severity] ?? c.severity}** ${c.body}`).join("\n"),
     );
   }
-  const meta = [`model: ${model}`, `commit: ${sha.slice(0, 7)}`];
+  const meta = [`model: ${model}`];
+  meta.push(scope.mode === "incremental" ? `range: ${short(scope.from!)}..${short(sha)}` : `commit: ${short(sha)}`);
   if (diff.skipped.length) meta.push(`제외 파일 ${diff.skipped.length}개`);
+  if (duplicates) meta.push(`중복 지적 ${duplicates}개 생략`);
   parts.push(`<sub>${meta.join(" · ")}</sub>`);
   return parts.join("\n\n");
 }
 
+/**
+ * Picks what to review. When this PR was reviewed before at an ancestor commit, only the
+ * new commits are reviewed; files are limited to those still in the PR so changes merged
+ * in from the base branch are not reviewed as if the author wrote them.
+ * Force-push / rebase (not "ahead") falls back to a full review.
+ */
+async function resolveScope(
+  gh: GitHub,
+  repo: string,
+  pr: GhPull,
+  prFiles: GhFile[],
+  last: string | undefined,
+  forceFull: boolean,
+  log: LogFn,
+): Promise<{ scope: ReviewScope; files: GhFile[] }> {
+  if (forceFull || !last || last === pr.head.sha) return { scope: { mode: "full" }, files: prFiles };
+  try {
+    const cmp = await gh.compare(repo, last, pr.head.sha);
+    if (cmp.status === "ahead" && cmp.files) {
+      const inPr = new Set(prFiles.map((f) => f.filename));
+      return {
+        scope: { mode: "incremental", from: last },
+        files: cmp.files.filter((f) => inPr.has(f.filename)),
+      };
+    }
+    log(`${repo}#${pr.number} 이전 리뷰 커밋과 이어지지 않음 (${cmp.status}, force-push 추정) → 전체 리뷰`);
+  } catch (e) {
+    if (!(e instanceof GitHubError && e.status === 404)) throw e;
+    log(`${repo}#${pr.number} 이전 리뷰 커밋을 찾을 수 없음 (force-push 추정) → 전체 리뷰`);
+  }
+  return { scope: { mode: "full" }, files: prFiles };
+}
+
+export interface ReviewOptions {
+  /** Review the whole PR even if an earlier commit was reviewed (manual review by URL). */
+  full?: boolean;
+}
+
 /** Review one PR at its current head and (unless dry-run) post a COMMENT review. */
-export async function reviewPull(repo: string, pr: GhPull, log: LogFn): Promise<HistoryEntry> {
+export async function reviewPull(repo: string, pr: GhPull, log: LogFn, opts: ReviewOptions = {}): Promise<HistoryEntry> {
   const settings = await config.settings();
+  const key = prKey(repo, pr.number);
   const entry: HistoryEntry = {
     time: new Date().toISOString(),
     repo,
@@ -108,20 +182,49 @@ export async function reviewPull(repo: string, pr: GhPull, log: LogFn): Promise<
   try {
     if (!settings.model) throw new Error("Claude 모델이 선택되지 않았습니다 (설정 탭).");
     const { gh, claude } = await clients();
-    log(`${repo}#${pr.number} 리뷰 시작: ${pr.title}`);
 
-    const files = await gh.listPullFiles(repo, pr.number);
+    const [prFiles, existing, reviewed] = await Promise.all([
+      gh.listPullFiles(repo, pr.number),
+      gh.listReviewComments(repo, pr.number),
+      config.reviewed(),
+    ]);
+    const { scope, files } = await resolveScope(gh, repo, pr, prFiles, reviewed[key], !!opts.full, log);
+    entry.mode = scope.mode;
+
     const diff = prepareDiff(files, settings.maxDiffChars);
-    if (diff.files.length === 0) throw new Error("리뷰할 수 있는 변경 파일이 없습니다.");
+    if (diff.files.length === 0) {
+      entry.status = "skipped";
+      entry.summary = "리뷰할 코드 변경이 없습니다 (lock/빌드/바이너리 파일만 변경되었거나 삭제만 있음).";
+      log(`${key} 건너뜀: 리뷰할 코드 변경 없음`);
+      await config.markReviewed(key, pr.head.sha);
+      await config.addHistory(entry);
+      return entry;
+    }
 
-    const result = await claude.review(settings.model, systemPrompt(settings), userPrompt(pr, repo, diff));
+    log(`${key} ${scope.mode === "incremental" ? `증분 리뷰 시작 (${short(scope.from!)}..${short(pr.head.sha)})` : "리뷰 시작"}: ${pr.title}`);
 
-    // Only lines present in the diff can be anchored; the rest go into the review body.
-    const byPath = new Map(diff.files.map((f) => [f.path, f.validLines]));
+    // Newest first, so the prompt cap keeps the most recent context.
+    const prior: PriorComment[] = existing
+      .filter((c) => isAgentComment(c.body))
+      .reverse()
+      .map((c) => ({ path: c.path, line: c.line, body: c.body }));
+
+    const result = await claude.review(
+      settings.model,
+      systemPrompt(settings),
+      userPrompt(pr, repo, diff, scope, prior),
+    );
+
+    const fresh = result.comments.filter((c) => !isDuplicate(c, prior));
+    const duplicates = result.comments.length - fresh.length;
+
+    // Anchor against the PR diff (not the compare diff): GitHub only accepts lines in the PR's own hunks.
+    const anchorable = new Map<string, Set<number>>();
+    for (const f of prFiles) if (f.patch) anchorable.set(f.filename, annotatePatch(f.patch).validLines);
     const anchored: ReviewComment[] = [];
     const stray: ModelComment[] = [];
-    for (const c of result.comments) {
-      if (byPath.get(c.path)?.has(c.line)) {
+    for (const c of fresh) {
+      if (anchorable.get(c.path)?.has(c.line)) {
         anchored.push({ path: c.path, line: c.line, side: "RIGHT", body: formatComment(c) });
       } else {
         stray.push(c);
@@ -129,40 +232,36 @@ export async function reviewPull(repo: string, pr: GhPull, log: LogFn): Promise<
     }
 
     entry.summary = result.summary;
-    entry.commentCount = result.comments.length;
+    entry.commentCount = fresh.length;
+    entry.duplicateCount = duplicates;
+    const dupNote = duplicates ? `, 중복 ${duplicates}개 생략` : "";
 
     if (settings.dryRun) {
       entry.status = "dry-run";
-      log(`${repo}#${pr.number} 드라이런: 코멘트 ${result.comments.length}개 (게시 안 함)`);
+      log(`${key} 드라이런: 코멘트 ${fresh.length}개${dupNote} (게시 안 함)`);
+    } else if (scope.mode === "incremental" && fresh.length === 0) {
+      // A follow-up push with nothing new to say would only add noise to the PR.
+      entry.status = "skipped";
+      log(`${key} 추가 커밋에 새 지적 없음${dupNote} → 게시 안 함 (요약은 이력에 저장)`);
     } else {
+      const body = (s: ModelComment[]) =>
+        buildReviewBody(result.summary, s, diff, settings.model, pr.head.sha, scope, duplicates);
       try {
-        await gh.createReview(
-          repo,
-          pr.number,
-          pr.head.sha,
-          buildReviewBody(result.summary, stray, diff, settings.model, pr.head.sha),
-          anchored,
-        );
+        await gh.createReview(repo, pr.number, pr.head.sha, body(stray), anchored);
       } catch (e) {
         // 422 = GitHub could not resolve a line; retry with everything in the body.
         if (!(e instanceof GitHubError && e.status === 422) || anchored.length === 0) throw e;
-        log(`${repo}#${pr.number} 라인 코멘트 실패(422), 본문으로 합쳐 재시도`);
-        await gh.createReview(
-          repo,
-          pr.number,
-          pr.head.sha,
-          buildReviewBody(result.summary, result.comments, diff, settings.model, pr.head.sha),
-          [],
-        );
+        log(`${key} 라인 코멘트 실패(422), 본문으로 합쳐 재시도`);
+        await gh.createReview(repo, pr.number, pr.head.sha, body(fresh), []);
       }
       entry.status = "posted";
-      log(`${repo}#${pr.number} 리뷰 게시 완료: 코멘트 ${result.comments.length}개`);
+      log(`${key} 리뷰 게시 완료: 코멘트 ${fresh.length}개${dupNote}`);
     }
-    await config.markReviewed(prKey(repo, pr.number), pr.head.sha);
+    await config.markReviewed(key, pr.head.sha);
   } catch (e) {
     entry.error = e instanceof Error ? e.message : String(e);
-    await config.recordFailure(prKey(repo, pr.number), pr.head.sha);
-    log(`${repo}#${pr.number} 실패: ${entry.error}`);
+    await config.recordFailure(key, pr.head.sha);
+    log(`${key} 실패: ${entry.error}`);
   }
   await config.addHistory(entry);
   return entry;
@@ -180,6 +279,10 @@ export async function markExistingAsSeen(repo: string, log: LogFn): Promise<numb
 let running = false;
 export const isRunning = () => running;
 
+/** "key@sha" already logged as skipped by a rule, so each poll does not repeat the log line.
+ *  Not persisted: removing the label later makes the PR reviewable on the next poll. */
+const skipLogged = new Set<string>();
+
 /** One polling pass over all enabled repos. Concurrent calls are ignored. */
 export async function runPoll(log: LogFn): Promise<void> {
   if (running) return;
@@ -191,6 +294,7 @@ export async function runPoll(log: LogFn): Promise<void> {
       return;
     }
     const { gh } = await clients();
+    const settings = await config.settings();
     let reviewedCount = 0;
     for (const repo of repos) {
       let pulls: GhPull[];
@@ -203,9 +307,19 @@ export async function runPoll(log: LogFn): Promise<void> {
       const [reviewed, failures] = await Promise.all([config.reviewed(), config.failures()]);
       for (const pr of pulls) {
         const key = prKey(repo.fullName, pr.number);
-        if (pr.draft) continue;
         if (!matchesBase(repo.baseBranches, pr.base.ref)) continue;
         if (reviewed[key] === pr.head.sha) continue;
+        const why = skipReason(
+          { title: pr.title, draft: pr.draft, author: pr.user.login, labels: (pr.labels ?? []).map((l) => l.name) },
+          settings.skipLabels,
+          settings.skipAuthors,
+        );
+        if (why) {
+          const mark = `${key}@${pr.head.sha}`;
+          if (!pr.draft && !skipLogged.has(mark)) log(`${key} 건너뜀: ${why}`);
+          skipLogged.add(mark);
+          continue;
+        }
         const f = failures[key];
         if (f && f.sha === pr.head.sha && f.count >= MAX_ATTEMPTS) continue;
         await reviewPull(repo.fullName, pr, log);

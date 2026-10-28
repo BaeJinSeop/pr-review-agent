@@ -19,6 +19,23 @@ export interface GhPull {
   user: { login: string };
   head: { sha: string; ref: string };
   base: { ref: string };
+  labels?: { name: string }[];
+}
+
+/** Existing line comment on a PR (GET /pulls/{n}/comments). */
+export interface GhReviewComment {
+  id: number;
+  path: string;
+  /** null when the comment is outdated (its line no longer exists at head). */
+  line: number | null;
+  original_line: number | null;
+  body: string;
+  commit_id: string;
+}
+
+export interface GhCompare {
+  status: "identical" | "ahead" | "behind" | "diverged";
+  files?: GhFile[];
 }
 
 export interface GhFile {
@@ -102,6 +119,15 @@ export class GitHub {
   listPullFiles(repo: string, number: number) {
     // GitHub returns at most 3000 files; 3 pages is plenty for review purposes.
     return this.paged<GhFile>(`/repos/${repo}/pulls/${number}/files`, 3);
+  }
+
+  /** Changes between two commits (base...head). Files capped at 300 by GitHub. */
+  compare(repo: string, base: string, head: string) {
+    return this.req<GhCompare>(`/repos/${repo}/compare/${base}...${head}`);
+  }
+
+  listReviewComments(repo: string, number: number) {
+    return this.paged<GhReviewComment>(`/repos/${repo}/pulls/${number}/comments`, 5);
   }
 
   createReview(repo: string, number: number, commitId: string, body: string, comments: ReviewComment[]) {

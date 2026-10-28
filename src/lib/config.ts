@@ -7,6 +7,10 @@ export interface Settings {
   skipExistingOnAdd: boolean;
   maxDiffChars: number;
   guidelines: string;
+  /** Comma-separated PR labels that skip review. */
+  skipLabels: string;
+  /** Comma-separated PR author logins that skip review (e.g. bots). */
+  skipAuthors: string;
 }
 
 export interface RepoConfig {
@@ -16,7 +20,7 @@ export interface RepoConfig {
   baseBranches: string;
 }
 
-export type HistoryStatus = "posted" | "dry-run" | "error";
+export type HistoryStatus = "posted" | "dry-run" | "skipped" | "error";
 
 export interface HistoryEntry {
   time: string;
@@ -29,6 +33,10 @@ export interface HistoryEntry {
   commentCount: number;
   summary: string;
   error?: string;
+  /** full = whole PR diff, incremental = only commits since the last review. */
+  mode?: "full" | "incremental";
+  /** Comments dropped because the same point was already posted. */
+  duplicateCount?: number;
 }
 
 export const DEFAULT_GUIDELINES = `- 버그, 보안, 성능, 장애 가능성을 우선 지적하고 스타일 취향은 지적하지 않는다.
@@ -45,6 +53,8 @@ export const DEFAULT_SETTINGS: Settings = {
   skipExistingOnAdd: true,
   maxDiffChars: 120_000,
   guidelines: DEFAULT_GUIDELINES,
+  skipLabels: "skip-review, no-review",
+  skipAuthors: "dependabot[bot], renovate[bot]",
 };
 
 const HISTORY_LIMIT = 300;
