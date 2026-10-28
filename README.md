@@ -39,3 +39,7 @@ CI=true npm run tauri build   # .app + .dmg (CI=true: Finder 레이아웃 AppleS
 
 - 현재 빌드는 ad-hoc 서명 → 다른 맥에서는 처음 실행 시 우클릭 → 열기 (또는 `xattr -dr com.apple.quarantine`)
 - 팀 배포: Apple Developer ID 서명 + 공증, Windows는 GitHub Actions `windows-latest`에서 MSI/NSIS 빌드
+
+## 라이선스
+
+[MIT](LICENSE)

@@ -2,6 +2,8 @@
 name = "pr-review-agent"
 version = "0.1.0"
 description = "GitHub PR review agent powered by Claude"
+license = "MIT"
+repository = "https://github.com/js8ae/pr-review-agent"
 edition = "2021"
 
 [lib]
