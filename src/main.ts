@@ -144,7 +144,7 @@ async function renderHistory() {
         <span class="badge ${h.status}">${label[h.status]}</span>
         <a href="#" data-href="${esc(h.url)}">${esc(h.repo)}#${h.number}</a>
         <span class="title">${esc(h.title)}</span>
-        <span class="meta">${h.mode === "incremental" ? "증분 · " : ""}코멘트 ${h.commentCount}${h.duplicateCount ? ` (중복 ${h.duplicateCount} 생략)` : ""} · ${esc(h.sha.slice(0, 7))} · ${fmtTime(h.time)}</span>
+        <span class="meta">${h.mode === "incremental" ? "증분 · " : ""}코멘트 ${h.commentCount}${h.duplicateCount ? ` (중복 ${h.duplicateCount} 생략)` : ""}${h.resolvedCount ? ` · 수정 확인 ${h.resolvedCount}` : ""} · ${esc(h.sha.slice(0, 7))} · ${fmtTime(h.time)}</span>
       </summary>
       ${h.error ? `<pre class="err">${esc(h.error)}</pre>` : ""}
       ${h.summary ? `<pre class="summary">${esc(h.summary)}</pre>` : ""}
@@ -274,6 +274,7 @@ async function renderSettings() {
     </div>
     <label class="check"><input type="checkbox" id="dryrun" ${s.dryRun ? "checked" : ""} /> 드라이런: 리뷰만 생성하고 PR에 게시하지 않음 (이력에서 확인)</label>
     <label class="check"><input type="checkbox" id="skipexisting" ${s.skipExistingOnAdd ? "checked" : ""} /> 레포를 켤 때 이미 열려 있는 PR은 건너뛰고 새 커밋부터 리뷰</label>
+    <label class="check"><input type="checkbox" id="autoresolve" ${s.autoResolve ? "checked" : ""} /> 이전 지적이 수정된 게 확인되면 "수정 확인" 답글을 달고 스레드를 resolve (에이전트가 단 스레드만)</label>
     <div class="grid2">
       <div class="field"><label>리뷰 제외 라벨 (쉼표로 구분)</label><input type="text" id="skiplabels" value="${esc(s.skipLabels)}" /></div>
       <div class="field"><label>리뷰 제외 작성자 (쉼표로 구분)</label><input type="text" id="skipauthors" value="${esc(s.skipAuthors)}" /></div>
@@ -354,6 +355,7 @@ async function renderSettings() {
       guidelines: $<HTMLTextAreaElement>("#guidelines").value,
       skipLabels: $<HTMLInputElement>("#skiplabels").value,
       skipAuthors: $<HTMLInputElement>("#skipauthors").value,
+      autoResolve: $<HTMLInputElement>("#autoresolve").checked,
     };
     await config.saveSettings(next);
     await invoke("set_poll_interval", { minutes: next.pollMinutes });

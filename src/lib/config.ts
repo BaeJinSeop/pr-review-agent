@@ -11,6 +11,8 @@ export interface Settings {
   skipLabels: string;
   /** Comma-separated PR author logins that skip review (e.g. bots). */
   skipAuthors: string;
+  /** Reply "fixed" and resolve the agent's own open threads the model judges fixed. */
+  autoResolve: boolean;
 }
 
 export interface RepoConfig {
@@ -37,6 +39,8 @@ export interface HistoryEntry {
   mode?: "full" | "incremental";
   /** Comments dropped because the same point was already posted. */
   duplicateCount?: number;
+  /** Earlier agent threads marked resolved because the fix was confirmed. */
+  resolvedCount?: number;
 }
 
 export const DEFAULT_GUIDELINES = `- 버그, 보안, 성능, 장애 가능성을 우선 지적하고 스타일 취향은 지적하지 않는다.
@@ -55,6 +59,7 @@ export const DEFAULT_SETTINGS: Settings = {
   guidelines: DEFAULT_GUIDELINES,
   skipLabels: "skip-review, no-review",
   skipAuthors: "dependabot[bot], renovate[bot]",
+  autoResolve: true,
 };
 
 const HISTORY_LIMIT = 300;

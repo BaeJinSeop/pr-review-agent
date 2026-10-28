@@ -1,7 +1,7 @@
 import { Claude, type ModelComment, type Severity } from "./claude";
 import { config, type HistoryEntry, type Settings } from "./config";
 import { annotatePatch, prepareDiff, type PreparedDiff } from "./diff";
-import { GitHub, GitHubError, type GhFile, type GhPull, type ReviewComment } from "./github";
+import { GitHub, GitHubError, type GhFile, type GhPull, type GhThread, type ReviewComment } from "./github";
 import { AGENT_MARKER, isAgentComment, isDuplicate, skipReason, type PriorComment } from "./rules";
 import { secrets } from "./secrets";
 
@@ -16,8 +16,10 @@ export type LogFn = (msg: string) => void;
 
 /** Automatic retries per (PR, head SHA). Manual review by URL ignores this. */
 const MAX_ATTEMPTS = 3;
-/** Prior agent comments shown to the model, newest first. */
+/** Open agent threads shown to the model (newest first). */
 const MAX_PRIOR_IN_PROMPT = 40;
+/** Resolved agent threads shown as "do not raise again" context. */
+const MAX_CLOSED_IN_PROMPT = 20;
 
 export async function clients(): Promise<{ gh: GitHub; claude: Claude }> {
   const [token, key] = await Promise.all([secrets.get("github_token"), secrets.get("anthropic_api_key")]);
@@ -47,7 +49,8 @@ function systemPrompt(s: Settings): string {
 - path는 diff 헤더의 파일 경로를 그대로 씁니다.
 - 실제로 문제가 되거나 개선 효과가 분명한 것만 지적합니다. 확신이 낮은 추측, 칭찬, 단순 요약은 라인 코멘트로 달지 않습니다.
 - 각 코멘트에는 왜 문제인지와 구체적인 수정 방법(가능하면 코드)을 적습니다.
-- "이전 리뷰 코멘트"가 주어지면, 그와 같은 지적은 다시 달지 않습니다. 이번 변경으로 해결된 이전 지적은 summary에 "해결됨"으로 짧게 적습니다.
+- "열린 이전 지적"(T1, T2 ... id가 붙음)이 주어지면, 같은 지적은 다시 달지 않습니다. 현재 diff에서 그 문제가 확실히 고쳐졌으면 resolved_threads에 id와 이유를 넣습니다. 고쳐졌는지 diff로 확인할 수 없거나 애매하면 넣지 않습니다.
+- "결론 난 이전 지적"은 사람이 이미 처리(수정 또는 수정하지 않기로 결정)한 것입니다. 다시 지적하지 않고, summary에서도 언급하지 않습니다.
 - 증분 리뷰에서는 이번에 바뀐 부분만 평가하고, PR 전체를 다시 요약하지 않습니다.
 - 지적할 것이 없으면 comments는 빈 배열로 두고 summary에 짧게 적습니다.
 
@@ -60,20 +63,35 @@ interface ReviewScope {
   from?: string; // last reviewed SHA for incremental
 }
 
-function priorSection(prior: PriorComment[]): string {
-  if (prior.length === 0) return "";
-  const lines = prior
-    .slice(0, MAX_PRIOR_IN_PROMPT)
-    .map((p) => {
-      const where = p.line === null ? `${p.path} (위치 변경됨)` : `${p.path}:${p.line}`;
-      const body = p.body.replace(AGENT_MARKER, "").replace(/\s+/g, " ").trim().slice(0, 300);
-      return `- ${where} — ${body}`;
-    })
-    .join("\n");
-  return `\n\n이전 리뷰 코멘트 (이미 PR에 달려 있음, 반복 금지):\n${lines}`;
+const oneLine = (body: string, max: number) =>
+  body.replace(AGENT_MARKER, "").replace(/\s+/g, " ").trim().slice(0, max);
+const where = (t: GhThread) => (t.line === null ? `${t.path} (위치 변경됨)` : `${t.path}:${t.line}`);
+
+/** Open threads get short ids the model can return; resolved ones are context only. */
+function priorSection(open: Map<string, GhThread>, closed: GhThread[]): string {
+  let out = "";
+  if (open.size) {
+    const lines = [...open].map(([id, t]) => `- [${id}] ${where(t)} — ${oneLine(t.body, 300)}`).join("\n");
+    out += `\n\n열린 이전 지적 (아직 처리 안 됨, 반복 금지, 고쳐졌으면 resolved_threads에 id 기재):\n${lines}`;
+  }
+  if (closed.length) {
+    const lines = closed
+      .slice(0, MAX_CLOSED_IN_PROMPT)
+      .map((t) => `- ${where(t)} — ${oneLine(t.body, 150)}`)
+      .join("\n");
+    out += `\n\n결론 난 이전 지적 (사람이 resolve함, 다시 꺼내지 말 것):\n${lines}`;
+  }
+  return out;
 }
 
-function userPrompt(pr: GhPull, repo: string, diff: PreparedDiff, scope: ReviewScope, prior: PriorComment[]): string {
+function userPrompt(
+  pr: GhPull,
+  repo: string,
+  diff: PreparedDiff,
+  scope: ReviewScope,
+  open: Map<string, GhThread>,
+  closed: GhThread[],
+): string {
   const body = (pr.body ?? "").slice(0, 4000);
   const files = diff.files
     .map((f) => `### ${f.path} (${f.status})\n\`\`\`diff\n${f.text}\n\`\`\``)
@@ -90,7 +108,7 @@ PR #${pr.number}: ${pr.title}
 ${range}
 
 PR 설명:
-${body || "(없음)"}${priorSection(prior)}
+${body || "(없음)"}${priorSection(open, closed)}
 
 변경 사항 (라인 번호는 새 파일 기준):
 
@@ -109,6 +127,7 @@ function buildReviewBody(
   sha: string,
   scope: ReviewScope,
   duplicates: number,
+  resolved: number,
 ): string {
   const title = scope.mode === "incremental" ? "## 🤖 PR Review Agent (추가 커밋 리뷰)" : "## 🤖 PR Review Agent";
   const parts = [`${title}\n\n${summary.trim()}`];
@@ -122,6 +141,7 @@ function buildReviewBody(
   meta.push(scope.mode === "incremental" ? `range: ${short(scope.from!)}..${short(sha)}` : `commit: ${short(sha)}`);
   if (diff.skipped.length) meta.push(`제외 파일 ${diff.skipped.length}개`);
   if (duplicates) meta.push(`중복 지적 ${duplicates}개 생략`);
+  if (resolved) meta.push(`이전 지적 ${resolved}개 수정 확인`);
   parts.push(`<sub>${meta.join(" · ")}</sub>`);
   return parts.join("\n\n");
 }
@@ -211,9 +231,9 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
     if (!settings.model) throw new Error("Claude 모델이 선택되지 않았습니다 (설정 탭).");
     const { gh, claude } = await clients();
 
-    const [prFiles, existing, reviewed] = await Promise.all([
+    const [prFiles, threads, reviewed] = await Promise.all([
       gh.listPullFiles(repo, pr.number),
-      gh.listReviewComments(repo, pr.number),
+      gh.listReviewThreads(repo, pr.number),
       config.reviewed(),
     ]);
     const { scope, files } = await resolveScope(gh, repo, pr, prFiles, reviewed[key], !!opts.full, log);
@@ -231,17 +251,28 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
 
     log(`${key} ${scope.mode === "incremental" ? `증분 리뷰 시작 (${short(scope.from!)}..${short(pr.head.sha)})` : "리뷰 시작"}: ${pr.title}`);
 
-    // Newest first, so the prompt cap keeps the most recent context.
-    const prior: PriorComment[] = existing
-      .filter((c) => isAgentComment(c.body))
-      .reverse()
-      .map((c) => ({ path: c.path, line: c.line, body: c.body }));
+    // Newest first, so the prompt caps keep the most recent context.
+    const agentThreads = threads.filter((t) => isAgentComment(t.body)).reverse();
+    const open = new Map<string, GhThread>();
+    agentThreads
+      .filter((t) => !t.isResolved)
+      .slice(0, MAX_PRIOR_IN_PROMPT)
+      .forEach((t, i) => open.set(`T${i + 1}`, t));
+    const closed = agentThreads.filter((t) => t.isResolved);
+    // Duplicate check covers resolved threads too: a point the team closed must not come back.
+    const prior: PriorComment[] = agentThreads.map((t) => ({ path: t.path, line: t.line, body: t.body }));
 
     const result = await claude.review(
       settings.model,
       systemPrompt(settings),
-      userPrompt(pr, repo, diff, scope, prior),
+      userPrompt(pr, repo, diff, scope, open, closed),
     );
+
+    // Only trust "fixed" for threads whose file the model actually saw in this diff.
+    const seen = new Set(diff.files.map((f) => f.path));
+    const toResolve = result.resolved
+      .map((r) => ({ thread: open.get(r.id), reason: r.reason }))
+      .filter((r): r is { thread: GhThread; reason: string } => !!r.thread && seen.has(r.thread.path));
 
     const fresh = result.comments.filter((c) => !isDuplicate(c, prior));
     const duplicates = result.comments.length - fresh.length;
@@ -263,18 +294,20 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
     entry.commentCount = fresh.length;
     entry.duplicateCount = duplicates;
     const dupNote = duplicates ? `, 중복 ${duplicates}개 생략` : "";
+    const willResolve = settings.autoResolve && !settings.dryRun ? toResolve.length : 0;
 
     if (settings.dryRun) {
       entry.status = "dry-run";
-      log(`${key} 드라이런: 코멘트 ${fresh.length}개${dupNote} (게시 안 함)`);
+      const fixNote = toResolve.length ? `, 수정 확인 ${toResolve.length}개` : "";
+      log(`${key} 드라이런: 코멘트 ${fresh.length}개${dupNote}${fixNote} (게시·resolve 안 함)`);
     } else if (fresh.length === 0 && (scope.mode === "incremental" || reviewed[key] === pr.head.sha)) {
       // A follow-up push, or a re-run on an already reviewed commit, with nothing new to say
-      // would only add a second summary to the PR.
+      // would only add a second summary to the PR. Fixed threads still get resolved below.
       entry.status = "skipped";
-      log(`${key} 새 지적 없음${dupNote} → 게시 안 함 (요약은 이력에 저장)`);
+      log(`${key} 새 지적 없음${dupNote} → 리뷰 게시 안 함 (요약은 이력에 저장)`);
     } else {
       const body = (s: ModelComment[]) =>
-        buildReviewBody(result.summary, s, diff, settings.model, pr.head.sha, scope, duplicates);
+        buildReviewBody(result.summary, s, diff, settings.model, pr.head.sha, scope, duplicates, willResolve);
       try {
         await gh.createReview(repo, pr.number, pr.head.sha, body(stray), anchored);
       } catch (e) {
@@ -285,6 +318,24 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
       }
       entry.status = "posted";
       log(`${key} 리뷰 게시 완료: 코멘트 ${fresh.length}개${dupNote}`);
+    }
+
+    // Resolve threads only after the review itself succeeded; one failure does not stop the rest.
+    if (willResolve) {
+      let ok = 0;
+      for (const { thread, reason } of toResolve) {
+        try {
+          await gh.replyAndResolve(
+            thread.id,
+            `✅ 수정 확인: ${reason}\n\n<sub>commit ${short(pr.head.sha)} 기준 · PR Review Agent</sub>\n\n${AGENT_MARKER}`,
+          );
+          ok++;
+        } catch (e) {
+          log(`${key} ${where(thread)} resolve 실패: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+      entry.resolvedCount = ok;
+      if (ok) log(`${key} 수정 확인된 이전 지적 ${ok}개 resolve`);
     }
     await config.markReviewed(key, pr.head.sha);
   } catch (e) {

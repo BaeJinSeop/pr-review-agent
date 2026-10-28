@@ -22,21 +22,53 @@ export interface GhPull {
   labels?: { name: string }[];
 }
 
-/** Existing line comment on a PR (GET /pulls/{n}/comments). */
-export interface GhReviewComment {
-  id: number;
-  path: string;
-  /** null when the comment is outdated (its line no longer exists at head). */
-  line: number | null;
-  original_line: number | null;
-  body: string;
-  commit_id: string;
-}
-
 export interface GhCompare {
   status: "identical" | "ahead" | "behind" | "diverged";
   files?: GhFile[];
 }
+
+/** A review thread, reduced to its first comment (the one that raised the point). */
+export interface GhThread {
+  id: string; // GraphQL node id
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string;
+  /** null when outdated (the line no longer exists at head). */
+  line: number | null;
+  body: string;
+}
+
+interface ThreadsPage {
+  repository: {
+    pullRequest: {
+      reviewThreads: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        nodes: {
+          id: string;
+          isResolved: boolean;
+          isOutdated: boolean;
+          path: string;
+          line: number | null;
+          comments: { nodes: { body: string }[] };
+        }[];
+      };
+    } | null;
+  } | null;
+}
+
+const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id isResolved isOutdated path line
+          comments(first: 1) { nodes { body } }
+        }
+      }
+    }
+  }
+}`;
 
 export interface GhFile {
   filename: string;
@@ -126,8 +158,47 @@ export class GitHub {
     return this.req<GhCompare>(`/repos/${repo}/compare/${base}...${head}`);
   }
 
-  listReviewComments(repo: string, number: number) {
-    return this.paged<GhReviewComment>(`/repos/${repo}/pulls/${number}/comments`, 5);
+  private async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+    const res = await this.req<{ data?: T; errors?: { message: string }[] }>("/graphql", {
+      method: "POST",
+      body: JSON.stringify({ query, variables }),
+    });
+    if (res.errors?.length) throw new GitHubError(200, `GitHub GraphQL: ${res.errors.map((e) => e.message).join("; ")}`);
+    return res.data as T;
+  }
+
+  /** All review threads of a PR with their resolved state (REST does not expose it). */
+  async listReviewThreads(repo: string, number: number): Promise<GhThread[]> {
+    const [owner, name] = repo.split("/");
+    const out: GhThread[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 10; page++) {
+      const data: ThreadsPage = await this.graphql<ThreadsPage>(THREADS_QUERY, { owner, name, number, cursor });
+      const t = data.repository?.pullRequest?.reviewThreads;
+      if (!t) break;
+      for (const n of t.nodes) {
+        const first = n.comments.nodes[0];
+        if (!first) continue;
+        out.push({ id: n.id, isResolved: n.isResolved, isOutdated: n.isOutdated, path: n.path, line: n.line, body: first.body });
+      }
+      if (!t.pageInfo.hasNextPage) break;
+      cursor = t.pageInfo.endCursor;
+    }
+    return out;
+  }
+
+  /** Reply in a thread, then mark it resolved. */
+  async replyAndResolve(threadId: string, body: string): Promise<void> {
+    await this.graphql(
+      `mutation($id: ID!, $body: String!) {
+        addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $id, body: $body }) { comment { id } }
+      }`,
+      { id: threadId, body },
+    );
+    await this.graphql(
+      `mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } } }`,
+      { id: threadId },
+    );
   }
 
   createReview(repo: string, number: number, commitId: string, body: string, comments: ReviewComment[]) {

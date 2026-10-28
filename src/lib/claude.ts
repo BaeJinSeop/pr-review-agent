@@ -12,9 +12,16 @@ export interface ModelComment {
   body: string;
 }
 
+export interface ResolvedThread {
+  /** Short id from the prompt (T1, T2, ...). */
+  id: string;
+  reason: string;
+}
+
 export interface ModelReview {
   summary: string;
   comments: ModelComment[];
+  resolved: ResolvedThread[];
 }
 
 export interface ModelInfo {
@@ -46,8 +53,21 @@ const REVIEW_TOOL = {
           required: ["path", "line", "severity", "body"],
         },
       },
+      resolved_threads: {
+        type: "array",
+        description:
+          "'열린 이전 지적' 중 현재 코드에서 문제가 확실히 고쳐진 것. 고쳐졌는지 diff로 확인할 수 없거나 애매하면 넣지 않는다.",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "프롬프트에 주어진 스레드 id (예: T3)" },
+            reason: { type: "string", description: "어떻게 고쳐졌는지 한 문장 (한국어)" },
+          },
+          required: ["id", "reason"],
+        },
+      },
     },
-    required: ["summary", "comments"],
+    required: ["summary", "comments", "resolved_threads"],
   },
 };
 
@@ -111,7 +131,7 @@ export class Claude {
     });
     await this.check(res);
     return (await res.json()) as {
-      content: Array<{ type: string; name?: string; input?: ModelReview; text?: string }>;
+      content: Array<{ type: string; name?: string; input?: unknown; text?: string }>;
       stop_reason: string;
     };
   }
@@ -130,7 +150,7 @@ export class Claude {
       }
     }
     const tool = json.content.find((c) => c.type === "tool_use" && c.name === REVIEW_TOOL.name);
-    let input: Partial<ModelReview> | undefined = tool?.input;
+    let input: RawReview | undefined = tool?.input as RawReview | undefined;
     if (!input) {
       // auto 모드에서 도구 대신 텍스트로 JSON을 준 경우 대비
       const text = json.content.filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
@@ -147,6 +167,16 @@ export class Claude {
     return {
       summary: String(input.summary ?? ""),
       comments: Array.isArray(input.comments) ? input.comments : [],
+      resolved: Array.isArray(input.resolved_threads)
+        ? input.resolved_threads.filter((r) => r && typeof r.id === "string")
+        : [],
     };
   }
+}
+
+/** Tool input exactly as the model sends it (snake_case, every field optional). */
+interface RawReview {
+  summary?: string;
+  comments?: ModelComment[];
+  resolved_threads?: ResolvedThread[];
 }
