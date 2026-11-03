@@ -397,37 +397,57 @@ export async function runPoll(log: LogFn): Promise<void> {
     const { gh } = await clients();
     const settings = await config.settings();
     let reviewedCount = 0;
+    const counts: string[] = [];
     for (const repo of repos) {
       let pulls: GhPull[];
       try {
         pulls = await gh.listOpenPulls(repo.fullName);
       } catch (e) {
         log(`${repo.fullName} PR 조회 실패: ${e instanceof Error ? e.message : e}`);
+        counts.push(`${repo.fullName} 조회 실패`);
         continue;
       }
+      counts.push(`${repo.fullName} 열린 PR ${pulls.length}개`);
       const [reviewed, failures] = await Promise.all([config.reviewed(), config.failures()]);
       for (const pr of pulls) {
         const key = prKey(repo.fullName, pr.number);
-        if (!matchesBase(repo.baseBranches, pr.base.ref)) continue;
-        if (reviewed[key] === pr.head.sha) continue;
+        // Log each skip once per commit, so every poll does not repeat the same line.
+        const skip = (why: string) => {
+          const mark = `${key}@${pr.head.sha}`;
+          if (!skipLogged.has(mark)) log(`${key} 건너뜀: ${why}`);
+          skipLogged.add(mark);
+        };
+        if (!matchesBase(repo.baseBranches, pr.base.ref)) {
+          skip(`base 브랜치 ${pr.base.ref}가 레포 설정(${repo.baseBranches})에 없음`);
+          continue;
+        }
+        if (reviewed[key] === pr.head.sha) {
+          skip(
+            `커밋 ${short(pr.head.sha)}은 이미 리뷰했거나 레포를 켤 때 기존 PR로 건너뜀 처리됨. ` +
+              `새 커밋을 푸시하거나 PR URL로 수동 리뷰하세요`,
+          );
+          continue;
+        }
         const why = skipReason(
           { title: pr.title, draft: pr.draft, author: pr.user.login, labels: (pr.labels ?? []).map((l) => l.name) },
           settings.skipLabels,
           settings.skipAuthors,
         );
         if (why) {
-          const mark = `${key}@${pr.head.sha}`;
-          if (!pr.draft && !skipLogged.has(mark)) log(`${key} 건너뜀: ${why}`);
-          skipLogged.add(mark);
+          skip(why);
           continue;
         }
         const f = failures[key];
-        if (f && f.sha === pr.head.sha && f.count >= MAX_ATTEMPTS) continue;
+        if (f && f.sha === pr.head.sha && f.count >= MAX_ATTEMPTS) {
+          skip(`커밋 ${short(pr.head.sha)}에서 ${f.count}번 실패해 자동 재시도 중단. PR URL로 수동 리뷰하세요`);
+          continue;
+        }
         await reviewPull(repo.fullName, pr, log);
         reviewedCount++;
       }
     }
-    log(reviewedCount ? `확인 완료: ${reviewedCount}개 리뷰` : "확인 완료: 새 PR/커밋 없음");
+    const detail = ` (${counts.join(", ")})`;
+    log(reviewedCount ? `확인 완료: ${reviewedCount}개 리뷰${detail}` : `확인 완료: 새 PR/커밋 없음${detail}`);
   } catch (e) {
     log(`확인 실패: ${e instanceof Error ? e.message : e}`);
   } finally {
