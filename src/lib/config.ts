@@ -96,6 +96,11 @@ export const config = {
     r[key] = sha;
     await set("reviewed", r);
   },
+  async unmarkReviewed(keys: string[]) {
+    const r = await config.reviewed();
+    for (const k of keys) delete r[k];
+    await set("reviewed", r);
+  },
 
   /** key -> failed attempts at a given SHA, so a broken PR is not retried forever. */
   failures: () => get<Record<string, { sha: string; count: number }>>("failures", {}),

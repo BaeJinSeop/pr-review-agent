@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Claude } from "./lib/claude";
 import { config, DEFAULT_GUIDELINES, type RepoConfig, type Settings } from "./lib/config";
 import { GitHub, parsePullUrl, type GhRepo } from "./lib/github";
-import { clients, isRunning, markExistingAsSeen, reviewPull, runPoll } from "./lib/reviewer";
+import { clients, isRunning, markExistingAsSeen, reviewExistingNow, reviewPull, runPoll } from "./lib/reviewer";
 import { secrets, type SecretKey } from "./lib/secrets";
 
 // ---------- helpers ----------
@@ -16,13 +16,23 @@ const esc = (s: unknown) =>
 
 const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString("ko-KR") : "-");
 
-function toast(msg: string, kind: "ok" | "err" = "ok") {
+function toast(msg: string, kind: "ok" | "err" = "ok", action?: { label: string; run: () => void }) {
   const t = $("#toast");
   t.textContent = msg;
+  if (action) {
+    const b = document.createElement("button");
+    b.textContent = action.label;
+    b.onclick = () => {
+      t.hidden = true;
+      action.run();
+    };
+    t.append(" ", b);
+  }
   t.className = kind;
   t.hidden = false;
   clearTimeout((toast as any).timer);
-  (toast as any).timer = setTimeout(() => (t.hidden = true), 3500);
+  // Longer when there is a button to press.
+  (toast as any).timer = setTimeout(() => (t.hidden = true), action ? 15000 : 3500);
 }
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -221,8 +231,12 @@ async function renderRepos() {
       await config.saveRepos(all.filter((r) => r.enabled || r.baseBranches));
       if (turnedOn && (await config.settings()).skipExistingOnAdd) {
         try {
-          const n = await markExistingAsSeen(name, log);
-          toast(`${name} 활성화 (기존 열린 PR ${n}개는 건너뜀)`);
+          const pulls = await markExistingAsSeen(name, log);
+          toast(
+            `${name} 활성화 (기존 열린 PR ${pulls.length}개는 건너뜀)`,
+            "ok",
+            pulls.length ? { label: `${pulls.length}개 지금 리뷰`, run: () => void reviewExistingNow(name, pulls, log).then(() => renderHistory()) } : undefined,
+          );
         } catch (e) {
           toast(errMsg(e), "err");
         }

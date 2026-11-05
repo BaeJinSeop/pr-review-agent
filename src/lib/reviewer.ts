@@ -369,12 +369,19 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
 }
 
 /** Mark all currently open PRs of a repo as seen, so only new pushes get reviewed. */
-export async function markExistingAsSeen(repo: string, log: LogFn): Promise<number> {
+export async function markExistingAsSeen(repo: string, log: LogFn): Promise<GhPull[]> {
   const { gh } = await clients();
   const pulls = await gh.listOpenPulls(repo);
   for (const p of pulls) await config.markReviewed(prKey(repo, p.number), p.head.sha);
   log(`${repo}: 기존 열린 PR ${pulls.length}개는 건너뜀 (이후 새 커밋부터 리뷰)`);
-  return pulls.length;
+  return pulls;
+}
+
+/** Undo markExistingAsSeen and poll now, so those PRs get the usual poll rules (base branch, labels, ...). */
+export async function reviewExistingNow(repo: string, pulls: GhPull[], log: LogFn): Promise<void> {
+  await config.unmarkReviewed(pulls.map((p) => prKey(repo, p.number)));
+  log(`${repo}: 기존 열린 PR ${pulls.length}개를 리뷰 대상으로 되돌림${running ? " (진행 중인 확인이 끝나면 다음 확인에서 리뷰)" : ""}`);
+  await runPoll(log);
 }
 
 /** " · 켜지 않은 레포의 열린 PR: ..." for open PRs under the same owners but in repos that are off,
