@@ -377,6 +377,19 @@ export async function markExistingAsSeen(repo: string, log: LogFn): Promise<numb
   return pulls.length;
 }
 
+/** " · 켜지 않은 레포의 열린 PR: ..." for open PRs under the same owners but in repos that are off,
+ *  so "새 PR 없음" is not mistaken for a missed PR. Empty when none. */
+async function otherRepoPulls(gh: GitHub, enabled: string[]): Promise<string> {
+  const on = new Set(enabled.map((r) => r.toLowerCase()));
+  const owners = [...new Set(enabled.map((r) => r.split("/")[0]))];
+  // Hint only: a search failure must not fail the poll.
+  const keys = await gh.searchOpenPulls(owners).catch(() => [] as string[]);
+  const off = keys.filter((k) => !on.has(k.split("#")[0].toLowerCase()));
+  if (off.length === 0) return "";
+  const more = off.length > 5 ? ` 외 ${off.length - 5}개` : "";
+  return ` · 켜지 않은 레포의 열린 PR: ${off.slice(0, 5).join(", ")}${more} (레포 탭에서 켜거나 PR URL로 수동 리뷰)`;
+}
+
 let running = false;
 export const isRunning = () => running;
 
@@ -447,7 +460,11 @@ export async function runPoll(log: LogFn): Promise<void> {
       }
     }
     const detail = ` (${counts.join(", ")})`;
-    log(reviewedCount ? `확인 완료: ${reviewedCount}개 리뷰${detail}` : `확인 완료: 새 PR/커밋 없음${detail}`);
+    log(
+      reviewedCount
+        ? `확인 완료: ${reviewedCount}개 리뷰${detail}`
+        : `확인 완료: 새 PR/커밋 없음${detail}${await otherRepoPulls(gh, repos.map((r) => r.fullName))}`,
+    );
   } catch (e) {
     log(`확인 실패: ${e instanceof Error ? e.message : e}`);
   } finally {

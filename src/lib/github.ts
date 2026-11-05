@@ -144,6 +144,15 @@ export class GitHub {
     return this.paged<GhPull>(`/repos/${repo}/pulls?state=open&sort=updated&direction=desc`, 2);
   }
 
+  /** "owner/repo#123" of open PRs in repos owned by the given users or orgs (search API, first 100). */
+  async searchOpenPulls(owners: string[]): Promise<string[]> {
+    const q = ["is:pr", "is:open", "archived:false", ...owners.map((o) => `user:${o}`)].join(" ");
+    const res = await this.req<{ items: { repository_url: string; number: number }[] }>(
+      `/search/issues?q=${encodeURIComponent(q)}&per_page=100`,
+    );
+    return res.items.map((i) => `${i.repository_url.split("/repos/")[1]}#${i.number}`);
+  }
+
   getPull(repo: string, number: number) {
     return this.req<GhPull>(`/repos/${repo}/pulls/${number}`);
   }
