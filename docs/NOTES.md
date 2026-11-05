@@ -4,7 +4,8 @@
 
 ## 현재 상태
 
-- 최신 커밋 `4b247be` (v0.1.1 버전 올림), `origin/main`까지 푸시됨.
+- 최신 커밋 `cd511d7`, `origin/main`까지 푸시됨. 버전은 아직 `0.1.1`(`4b247be`)이고,
+  그 뒤 운영 이슈 대응 커밋 4개가 올라감(아래 "운영 이슈 대응"). 릴리스 전에 버전을 0.1.2로 올릴지 결정 필요.
 - `v0.1.1` 태그는 아직 만들지 않음. 릴리스하려면:
   ```bash
   git tag v0.1.1 && git push origin v0.1.1
@@ -22,14 +23,21 @@
 - `bf991dd` 리뷰 본문에 "수정 확인된 이전 지적" 섹션, 새 지적 0개여도 수정 확인 있으면 게시.
 - `ee56bec` 폴링 시 PR을 건너뛴 이유와 레포별 열린 PR 수를 로그에 남김.
 
-## 알려진 운영 이슈
+## 운영 이슈 대응 (v0.1.1 이후, 앱 실행 검증 전: tsc/빌드만 통과)
 
-- "새 PR/커밋 없음"인데 PR이 있는 경우: 대부분 PR이 켜지 않은 레포에 있음
-  (예: Intocns/cloudSystemBatch#1은 cloudSystemBatch 레포, IntocnsSmsServer가 아님).
-- "레포를 켤 때 기존 열린 PR 건너뛰기"가 기본 켜짐이라, 켠 시점에 열려 있던 PR은 새 커밋 전까지 리뷰 안 함.
-  바로 리뷰하려면 대시보드에 PR URL을 넣어 수동 리뷰.
-- 일부 Claude 모델은 `tool_choice: tool/any` 미지원 → auto 모드로 폴백.
-- Fine-grained PAT은 Resource owner 한 곳만 보임. 여러 owner 레포는 Classic PAT(`repo`) 필요.
+- `cf01b05` "새 PR/커밋 없음"인데 PR이 켜지 않은 레포에 있던 문제(예: Intocns/cloudSystemBatch#1):
+  리뷰 0개일 때 켜진 레포의 owner로 검색(`/search/issues` `user:<owner>`)해서 켜지 않은 레포의 열린 PR을
+  확인 로그 줄에 붙임(최대 5개). 검색 실패는 무시. `user:`는 조직에도 동작함을 `gh api`로 확인.
+- `5966d57` 레포를 켤 때 기존 열린 PR 건너뛰기(`skipExistingOnAdd` 기본 켜짐): 토스트에 "N개 지금 리뷰" 버튼(15초).
+  누르면 건너뜀 표시(`reviewed`)를 지우고 `runPoll` → base 브랜치/라벨/봇 규칙이 폴링과 동일하게 적용.
+  토스트를 놓치면 기존처럼 PR URL 수동 리뷰.
+- `beb902d` 강제 `tool_choice` 미지원 모델을 config `autoOnlyModels`에 저장(재시작해도 유지).
+  한계: 나중에 그 모델이 지원해도 계속 auto 모드(목록에서 지우려면 config.json 편집).
+- `cd511d7` Fine-grained PAT은 Resource owner 한 곳만 보임 → GitHub 제약이라 안내로 대응.
+  설정 화면/README에 "여러 owner면 Classic PAT(`repo`)", `github_pat_` 토큰으로 404가 나면 에러에 힌트 추가.
+
+남은 운영 메모:
+- "레포를 켤 때 기존 열린 PR 건너뛰기"는 비용 때문에 기본값 유지.
 
 ## 검토 중: 여러 사람이 동시에 돌릴 때 중복 리뷰 방지 (미구현)
 
