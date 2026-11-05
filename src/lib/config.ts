@@ -118,6 +118,13 @@ export const config = {
   },
   clearHistory: () => set("history", []),
 
+  /** Models that rejected a forced tool_choice, so later reviews go straight to auto mode. */
+  autoOnlyModels: () => get<string[]>("autoOnlyModels", []),
+  async addAutoOnlyModel(model: string) {
+    const m = await config.autoOnlyModels();
+    if (!m.includes(model)) await set("autoOnlyModels", [...m, model]);
+  },
+
   lastCheck: () => get<string | null>("lastCheck", null),
   setLastCheck: (iso: string) => set("lastCheck", iso),
 };

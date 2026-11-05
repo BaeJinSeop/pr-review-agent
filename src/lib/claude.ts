@@ -1,4 +1,5 @@
 import { fetch } from "@tauri-apps/plugin-http";
+import { config } from "./config";
 
 const API = "https://api.anthropic.com/v1";
 const VERSION = "2023-06-01";
@@ -77,8 +78,6 @@ export class AnthropicError extends Error {
   }
 }
 
-const AUTO_ONLY_MODELS = new Set<string>();
-
 export class Claude {
   constructor(private apiKey: string) {}
 
@@ -113,10 +112,7 @@ export class Claude {
   }
 
   // 모델마다 강제 tool_choice({type:"tool"})를 지원하지 않는 경우가 있어,
-  // 거절되면 이 모델은 auto 모드로 기억하고 다시 호출한다. Claude 인스턴스는 리뷰마다
-  // 새로 만들어지므로 모듈 단위로 기억한다.
-  private autoOnly = AUTO_ONLY_MODELS;
-
+  // 거절되면 이 모델은 auto 모드로 config에 기억하고 다시 호출한다(앱을 다시 켜도 유지).
   private async callMessages(model: string, system: string, user: string, forced: boolean) {
     const res = await fetch(`${API}/messages`, {
       method: "POST",
@@ -141,12 +137,12 @@ export class Claude {
 
   async review(model: string, system: string, user: string): Promise<ModelReview> {
     let json;
-    const forced = !this.autoOnly.has(model);
+    const forced = !(await config.autoOnlyModels()).includes(model);
     try {
       json = await this.callMessages(model, system, user, forced);
     } catch (e) {
       if (forced && e instanceof AnthropicError && e.status === 400 && /tool_choice/.test(e.message)) {
-        this.autoOnly.add(model);
+        await config.addAutoOnlyModel(model);
         json = await this.callMessages(model, system, user, false);
       } else {
         throw e;
