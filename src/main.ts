@@ -269,7 +269,7 @@ async function renderSettings() {
     ${secretRow(
       "github_token",
       "GitHub 토큰",
-      "Fine-grained PAT 권장. Repository permissions: <b>Pull requests: Read and write</b>, <b>Contents: Read</b>. 조직 레포는 Resource owner를 조직으로 지정해야 합니다.",
+      "레포가 한 owner(개인 또는 조직 하나)에만 있으면 Fine-grained PAT: Resource owner를 그 owner로 지정하고 Repository permissions <b>Pull requests: Read and write</b>, <b>Contents: Read</b>. 개인·조직 등 <b>여러 owner</b>의 레포를 함께 쓰면 Fine-grained PAT은 한 owner만 보이므로 <b>Classic PAT (repo 권한)</b>을 쓰세요.",
       !!token,
     )}
     ${secretRow("anthropic_api_key", "Claude API 키", "console.anthropic.com 에서 발급한 API 키 (sk-ant-...)", !!key)}

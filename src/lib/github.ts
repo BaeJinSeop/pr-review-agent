@@ -114,7 +114,12 @@ export class GitHub {
       } catch {
         /* not json */
       }
-      throw new GitHubError(res.status, `GitHub ${res.status}: ${msg}`);
+      // GitHub answers 404 for repos the token cannot see; with a fine-grained PAT that is usually another owner.
+      const hint =
+        res.status === 404 && this.token.startsWith("github_pat_")
+          ? " (Fine-grained PAT은 Resource owner 한 곳의 레포만 접근할 수 있습니다. 여러 owner면 Classic PAT(repo 권한)을 쓰세요)"
+          : "";
+      throw new GitHubError(res.status, `GitHub ${res.status}: ${msg}${hint}`);
     }
     return (await res.json()) as T;
   }

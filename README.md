@@ -7,6 +7,7 @@ GitHub PR을 주기적으로 확인해서 Claude로 리뷰하고, PR에 리뷰 �
 1. **설정** 탭
    - GitHub 토큰 저장: Fine-grained PAT, Repository permissions `Pull requests: Read and write`, `Contents: Read`
      (조직 레포는 Resource owner를 조직으로 지정, 조직 정책에 따라 승인 필요)
+     - Fine-grained PAT은 Resource owner 한 곳의 레포만 보인다. 개인·조직 등 여러 owner의 레포를 함께 쓰면 Classic PAT(`repo` 권한)을 쓴다.
    - Claude API 키 저장 → "모델 목록 불러오기" → 모델 선택 → 설정 저장
    - 처음엔 **드라이런**을 켜고 리뷰 품질을 이력에서 확인한 뒤 끄는 것을 권장
 2. **레포** 탭: "GitHub에서 레포 불러오기" → 리뷰할 레포 체크, 필요하면 대상 base 브랜치 입력
