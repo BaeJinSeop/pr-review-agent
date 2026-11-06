@@ -88,7 +88,7 @@ async function renderDashboard() {
       <div><span class="label">Claude</span>${key ? `<span class="ok">${esc(settings.model || "모델 미선택")}</span>` : `<span class="bad">API 키 없음</span>`}</div>
       <div><span class="label">활성 레포</span>${enabled}개</div>
       <div><span class="label">확인 주기</span>${settings.pollMinutes}분</div>
-      <div><span class="label">마지막 확인</span>${fmtTime(lastCheck)}</div>
+      <div><span class="label">마지막 확인</span><span id="last-check">${fmtTime(lastCheck)}</span></div>
       <div><span class="label">모드</span>${settings.dryRun ? `<span class="warn">드라이런 (게시 안 함)</span>` : "PR에 코멘트 게시"}</div>
     </div>
     ${ready ? "" : `<p class="hint">설정 탭에서 토큰·API 키·모델을 저장하고, 레포 탭에서 대상 레포를 켜면 자동 리뷰가 시작됩니다.</p>`}
@@ -137,9 +137,11 @@ async function renderDashboard() {
   await renderHistory();
 }
 
+// Also refreshes "마지막 확인": automatic polls only call this, not renderDashboard.
 async function renderHistory() {
   const el = document.getElementById("history");
   if (!el) return;
+  $("#last-check").textContent = fmtTime(await config.lastCheck());
   const history = await config.history();
   if (history.length === 0) {
     el.innerHTML = `<p class="hint">아직 리뷰 이력이 없습니다.</p>`;
