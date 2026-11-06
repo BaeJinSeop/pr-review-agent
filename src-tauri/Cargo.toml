@@ -1,6 +1,6 @@
 [package]
 name = "pr-review-agent"
-version = "0.1.1"
+version = "0.1.3"
 description = "GitHub PR review agent powered by Claude"
 license = "MIT"
 repository = "https://github.com/js8ae/pr-review-agent"
