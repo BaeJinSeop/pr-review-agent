@@ -179,7 +179,7 @@ async function renderRepos() {
     <div class="row">
       <button id="load-repos">GitHub에서 레포 불러오기</button>
       <input id="repo-filter" placeholder="검색" value="${esc(repoFilter)}" />
-      <span class="hint">${repos.filter((r) => r.enabled).length}개 활성</span>
+      <span class="hint" id="repo-count">${repos.filter((r) => r.enabled).length}개 활성</span>
     </div>
     ${names.size === 0 ? `<p class="hint">"GitHub에서 레포 불러오기"를 눌러 토큰으로 접근 가능한 레포를 가져오세요.</p>` : ""}
     <table class="repos">
@@ -230,7 +230,9 @@ async function renderRepos() {
       const next: RepoConfig = { fullName: name, enabled: en.checked, baseBranches: br.value.trim() };
       if (idx >= 0) all[idx] = next;
       else all.push(next);
-      await config.saveRepos(all.filter((r) => r.enabled || r.baseBranches));
+      const saved = all.filter((r) => r.enabled || r.baseBranches);
+      await config.saveRepos(saved);
+      $("#repo-count").textContent = `${saved.filter((r) => r.enabled).length}개 활성`;
       if (turnedOn && (await config.settings()).skipExistingOnAdd) {
         try {
           const pulls = await markExistingAsSeen(name, log);
