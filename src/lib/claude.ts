@@ -1,5 +1,6 @@
 import { fetch } from "@tauri-apps/plugin-http";
-import { config } from "./config";
+import { config, type Usage } from "./config";
+import { estimateUsd } from "./pricing";
 
 const API = "https://api.anthropic.com/v1";
 const VERSION = "2023-06-01";
@@ -23,6 +24,7 @@ export interface ModelReview {
   summary: string;
   comments: ModelComment[];
   resolved: ResolvedThread[];
+  usage: Usage;
 }
 
 export interface ModelInfo {
@@ -132,6 +134,7 @@ export class Claude {
     return (await res.json()) as {
       content: Block[];
       stop_reason: string;
+      usage: { input_tokens: number; output_tokens: number };
     };
   }
 
@@ -148,6 +151,10 @@ export class Claude {
         throw e;
       }
     }
+    // Recorded before parsing: a response without a usable review is still billed.
+    const { input_tokens: inTok, output_tokens: outTok } = json.usage;
+    const usage: Usage = { input: inTok, output: outTok, usd: estimateUsd(model, inTok, outTok) };
+    await config.addUsage(usage);
     const input = extractReview(json.content);
     if (!input) {
       const blocks = json.content
@@ -161,6 +168,7 @@ export class Claude {
       resolved: Array.isArray(input.resolved_threads)
         ? input.resolved_threads.filter((r) => r && typeof r.id === "string")
         : [],
+      usage,
     };
   }
 }

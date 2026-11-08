@@ -304,6 +304,7 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
       systemPrompt(settings),
       userPrompt(pr, repo, diff, scope, open, closed),
     );
+    entry.usage = result.usage;
 
     // Only trust "fixed" for threads whose file the model actually saw in this diff.
     const seen = new Set(diff.files.map((f) => f.path));

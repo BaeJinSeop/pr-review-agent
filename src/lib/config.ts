@@ -22,6 +22,13 @@ export interface RepoConfig {
   baseBranches: string;
 }
 
+export interface Usage {
+  input: number;
+  output: number;
+  /** Estimated USD; null when the model's price is unknown. */
+  usd: number | null;
+}
+
 export type HistoryStatus = "posted" | "dry-run" | "skipped" | "error";
 
 export interface HistoryEntry {
@@ -43,6 +50,8 @@ export interface HistoryEntry {
   resolvedCount?: number;
   /** Login whose agent review already existed at this commit, so this review was not posted. */
   alreadyBy?: string;
+  /** Claude tokens and estimated cost of this review. */
+  usage?: Usage;
 }
 
 export const DEFAULT_GUIDELINES = `- 버그, 보안, 성능, 장애 가능성을 우선 지적하고 스타일 취향은 지적하지 않는다.
@@ -65,6 +74,8 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 const HISTORY_LIMIT = 300;
+
+const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
 let storePromise: Promise<Store> | null = null;
 function store(): Promise<Store> {
@@ -125,6 +136,19 @@ export const config = {
   async addAutoOnlyModel(model: string) {
     const m = await config.autoOnlyModels();
     if (!m.includes(model)) await set("autoOnlyModels", [...m, model]);
+  },
+
+  /** "YYYY-MM" -> Claude usage of every call that month. Kept apart from history, which is capped and clearable. */
+  monthlyUsage: () => get<Record<string, { input: number; output: number; usd: number }>>("monthlyUsage", {}),
+  async usageThisMonth() {
+    return (await config.monthlyUsage())[monthKey()] ?? { input: 0, output: 0, usd: 0 };
+  },
+  async addUsage(u: Usage) {
+    const all = await config.monthlyUsage();
+    const m = all[monthKey()] ?? { input: 0, output: 0, usd: 0 };
+    // Unknown-price models add tokens only.
+    all[monthKey()] = { input: m.input + u.input, output: m.output + u.output, usd: m.usd + (u.usd ?? 0) };
+    await set("monthlyUsage", all);
   },
 
   lastCheck: () => get<string | null>("lastCheck", null),

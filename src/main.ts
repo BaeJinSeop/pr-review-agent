@@ -35,6 +35,10 @@ function toast(msg: string, kind: "ok" | "err" = "ok", action?: { label: string;
   (toast as any).timer = setTimeout(() => (t.hidden = true), action ? 15000 : 3500);
 }
 
+const fmtTokens = (n: number) => (n < 1000 ? String(n) : n < 1e6 ? `${(n / 1e3).toFixed(1)}k` : `${(n / 1e6).toFixed(2)}M`);
+const fmtMonthUsage = (u: { input: number; output: number; usd: number }) =>
+  `약 $${u.usd.toFixed(2)} · 토큰 ${fmtTokens(u.input + u.output)}`;
+
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 // ---------- state ----------
@@ -73,10 +77,11 @@ document.addEventListener("click", (e) => {
 
 // ---------- dashboard ----------
 async function renderDashboard() {
-  const [settings, repos, lastCheck, token, key] = await Promise.all([
+  const [settings, repos, lastCheck, month, token, key] = await Promise.all([
     config.settings(),
     config.repos(),
     config.lastCheck(),
+    config.usageThisMonth(),
     secrets.get("github_token"),
     secrets.get("anthropic_api_key"),
   ]);
@@ -89,6 +94,7 @@ async function renderDashboard() {
       <div><span class="label">활성 레포</span>${enabled}개</div>
       <div><span class="label">확인 주기</span>${settings.pollMinutes}분</div>
       <div><span class="label">마지막 확인</span><span id="last-check">${fmtTime(lastCheck)}</span></div>
+      <div><span class="label">이번 달 Claude 비용 (추정)</span><span id="month-usage">${fmtMonthUsage(month)}</span></div>
       <div><span class="label">모드</span>${settings.dryRun ? `<span class="warn">드라이런 (게시 안 함)</span>` : "PR에 코멘트 게시"}</div>
     </div>
     ${ready ? "" : `<p class="hint">설정 탭에서 토큰·API 키·모델을 저장하고, 레포 탭에서 대상 레포를 켜면 자동 리뷰가 시작됩니다.</p>`}
@@ -147,11 +153,12 @@ async function renderDashboard() {
   await renderHistory();
 }
 
-// Also refreshes "마지막 확인": automatic polls only call this, not renderDashboard.
+// Also refreshes "마지막 확인" and this month's cost: automatic polls only call this, not renderDashboard.
 async function renderHistory() {
   const el = document.getElementById("history");
   if (!el) return;
   $("#last-check").textContent = fmtTime(await config.lastCheck());
+  $("#month-usage").textContent = fmtMonthUsage(await config.usageThisMonth());
   const history = await config.history();
   if (history.length === 0) {
     el.innerHTML = `<p class="hint">아직 리뷰 이력이 없습니다.</p>`;
@@ -166,7 +173,7 @@ async function renderHistory() {
         <span class="badge ${h.status}">${label[h.status]}</span>
         <a href="#" data-href="${esc(h.url)}">${esc(h.repo)}#${h.number}</a>
         <span class="title">${esc(h.title)}</span>
-        <span class="meta">${h.mode === "incremental" ? "증분 · " : ""}코멘트 ${h.commentCount}${h.duplicateCount ? ` (중복 ${h.duplicateCount} 생략)` : ""}${h.resolvedCount ? ` · 수정 확인 ${h.resolvedCount}` : ""}${h.alreadyBy ? ` · ${esc(h.alreadyBy)}님이 먼저 리뷰` : ""} · ${esc(h.sha.slice(0, 7))} · ${fmtTime(h.time)}</span>
+        <span class="meta">${h.mode === "incremental" ? "증분 · " : ""}코멘트 ${h.commentCount}${h.duplicateCount ? ` (중복 ${h.duplicateCount} 생략)` : ""}${h.resolvedCount ? ` · 수정 확인 ${h.resolvedCount}` : ""}${h.alreadyBy ? ` · ${esc(h.alreadyBy)}님이 먼저 리뷰` : ""}${h.usage ? ` · 토큰 ${fmtTokens(h.usage.input)}/${fmtTokens(h.usage.output)} · ${h.usage.usd === null ? "가격 미상" : `$${h.usage.usd.toFixed(3)}`}` : ""} · ${esc(h.sha.slice(0, 7))} · ${fmtTime(h.time)}</span>
       </summary>
       ${h.error ? `<pre class="err">${esc(h.error)}</pre>` : ""}
       ${h.summary ? `<pre class="summary">${esc(h.summary)}</pre>` : ""}
