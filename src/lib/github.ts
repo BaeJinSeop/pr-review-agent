@@ -78,6 +78,14 @@ export interface GhFile {
   patch?: string;
 }
 
+export interface GhReview {
+  /** null for deleted accounts. */
+  user: { login: string } | null;
+  body: string | null;
+  /** The commit the review was made on. */
+  commit_id: string;
+}
+
 export interface ReviewComment {
   path: string;
   line: number;
@@ -213,6 +221,10 @@ export class GitHub {
       `mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } } }`,
       { id: threadId },
     );
+  }
+
+  listReviews(repo: string, number: number) {
+    return this.paged<GhReview>(`/repos/${repo}/pulls/${number}/reviews`, 3);
   }
 
   createReview(repo: string, number: number, commitId: string, body: string, comments: ReviewComment[]) {

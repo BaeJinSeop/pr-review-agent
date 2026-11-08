@@ -120,6 +120,15 @@ ${body || "(없음)"}${priorSection(open, closed)}
 ${files}${skipped}`;
 }
 
+/** Every review body this app posts starts with this (also identifies reviews posted by other users' apps). */
+const REVIEW_TITLE = "## 🤖 PR Review Agent";
+
+/** Login of whoever already posted an agent review at this commit, from any user's app; null if none. */
+async function agentReviewAt(gh: GitHub, repo: string, number: number, sha: string): Promise<string | null> {
+  const r = (await gh.listReviews(repo, number)).find((x) => x.commit_id === sha && (x.body ?? "").startsWith(REVIEW_TITLE));
+  return r ? (r.user?.login ?? "(삭제된 계정)") : null;
+}
+
 function formatComment(c: ModelComment): string {
   return `**${SEVERITY_LABEL[c.severity] ?? c.severity}** ${c.body}\n\n${AGENT_MARKER}`;
 }
@@ -135,7 +144,7 @@ function buildReviewBody(
   fixed: FixedThread[],
   autoResolved: boolean,
 ): string {
-  const title = scope.mode === "incremental" ? "## 🤖 PR Review Agent (추가 커밋 리뷰)" : "## 🤖 PR Review Agent";
+  const title = scope.mode === "incremental" ? `${REVIEW_TITLE} (추가 커밋 리뷰)` : REVIEW_TITLE;
   const parts = [`${title}\n\n${summary.trim()}`];
   if (fixed.length) {
     const heading = autoResolved
@@ -196,6 +205,8 @@ async function resolveScope(
 export interface ReviewOptions {
   /** Review the whole PR even if an earlier commit was reviewed (manual review by URL). */
   full?: boolean;
+  /** Review and post even if an agent review already exists at this commit (user confirmed). */
+  force?: boolean;
 }
 
 /** PRs with a review in progress. A second request for the same PR (double click, or a
@@ -244,6 +255,18 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
   try {
     if (!settings.model) throw new Error("Claude 모델이 선택되지 않았습니다 (설정 탭).");
     const { gh, claude } = await clients();
+
+    // Several people may run the app on the same repo; the review on GitHub is the shared record.
+    const by = opts.force ? null : await agentReviewAt(gh, repo, pr.number, pr.head.sha);
+    if (by) {
+      entry.status = "skipped";
+      entry.alreadyBy = by;
+      entry.summary = `${by}님이 이 커밋(${short(pr.head.sha)})을 이미 리뷰했습니다.`;
+      log(`${key} 건너뜀: ${by}님이 커밋 ${short(pr.head.sha)}을 이미 리뷰함`);
+      await config.markReviewed(key, pr.head.sha);
+      await config.addHistory(entry);
+      return entry;
+    }
 
     const [prFiles, threads, reviewed] = await Promise.all([
       gh.listPullFiles(repo, pr.number),
@@ -309,12 +332,18 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
     entry.duplicateCount = duplicates;
     const dupNote = duplicates ? `, 중복 ${duplicates}개 생략` : "";
     const autoResolve = settings.autoResolve && !settings.dryRun;
+    // Checked again right before posting: another app may have posted while Claude was running.
+    const racedBy = settings.dryRun || opts.force ? null : await agentReviewAt(gh, repo, pr.number, pr.head.sha);
 
     if (settings.dryRun) {
       entry.status = "dry-run";
       const fixNote = toResolve.length ? `, 수정 확인 ${toResolve.length}개` : "";
       log(`${key} 드라이런: 코멘트 ${fresh.length}개${dupNote}${fixNote} (게시·resolve 안 함)`);
       for (const { thread, reason } of toResolve) log(`${key}   수정 확인 ${where(thread)}: ${reason}`);
+    } else if (racedBy) {
+      entry.status = "skipped";
+      entry.alreadyBy = racedBy;
+      log(`${key} 리뷰하는 사이 ${racedBy}님이 같은 커밋을 먼저 리뷰함 → 게시 안 함 (요약은 이력에 저장)`);
     } else {
       // Resolve first so the review body lists only threads that were actually resolved.
       // One failure does not stop the rest.

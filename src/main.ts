@@ -112,23 +112,33 @@ async function renderDashboard() {
     if (btn.disabled) return;
     const parsed = parsePullUrl($<HTMLInputElement>("#pr-url").value);
     if (!parsed) return toast("PR URL 형식이 아닙니다.", "err");
-    btn.disabled = true;
-    btn.textContent = "리뷰 중...";
-    try {
-      const { gh } = await clients();
-      const pr = await gh.getPull(parsed.repo, parsed.number);
-      const r = await reviewPull(parsed.repo, pr, log, { full: true });
-      toast(
-        r.status === "error" ? `실패: ${r.error}` : r.status === "skipped" ? `건너뜀: ${r.summary}` : "리뷰 완료",
-        r.status === "error" ? "err" : "ok",
-      );
-    } catch (e) {
-      toast(errMsg(e), "err");
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "이 PR 리뷰";
-    }
-    await renderHistory();
+    const review = async (force: boolean) => {
+      btn.disabled = true;
+      btn.textContent = "리뷰 중...";
+      try {
+        const { gh } = await clients();
+        const pr = await gh.getPull(parsed.repo, parsed.number);
+        const r = await reviewPull(parsed.repo, pr, log, { full: true, force });
+        toast(
+          r.status === "error"
+            ? `실패: ${r.error}`
+            : r.alreadyBy
+              ? `${r.alreadyBy}님이 이 커밋을 이미 리뷰했습니다.`
+              : r.status === "skipped"
+                ? `건너뜀: ${r.summary}`
+                : "리뷰 완료",
+          r.status === "error" ? "err" : "ok",
+          r.alreadyBy ? { label: "그래도 리뷰", run: () => void review(true) } : undefined,
+        );
+      } catch (e) {
+        toast(errMsg(e), "err");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "이 PR 리뷰";
+      }
+      await renderHistory();
+    };
+    await review(false);
   };
   $("#clear-history").onclick = async () => {
     await config.clearHistory();
@@ -156,7 +166,7 @@ async function renderHistory() {
         <span class="badge ${h.status}">${label[h.status]}</span>
         <a href="#" data-href="${esc(h.url)}">${esc(h.repo)}#${h.number}</a>
         <span class="title">${esc(h.title)}</span>
-        <span class="meta">${h.mode === "incremental" ? "증분 · " : ""}코멘트 ${h.commentCount}${h.duplicateCount ? ` (중복 ${h.duplicateCount} 생략)` : ""}${h.resolvedCount ? ` · 수정 확인 ${h.resolvedCount}` : ""} · ${esc(h.sha.slice(0, 7))} · ${fmtTime(h.time)}</span>
+        <span class="meta">${h.mode === "incremental" ? "증분 · " : ""}코멘트 ${h.commentCount}${h.duplicateCount ? ` (중복 ${h.duplicateCount} 생략)` : ""}${h.resolvedCount ? ` · 수정 확인 ${h.resolvedCount}` : ""}${h.alreadyBy ? ` · ${esc(h.alreadyBy)}님이 먼저 리뷰` : ""} · ${esc(h.sha.slice(0, 7))} · ${fmtTime(h.time)}</span>
       </summary>
       ${h.error ? `<pre class="err">${esc(h.error)}</pre>` : ""}
       ${h.summary ? `<pre class="summary">${esc(h.summary)}</pre>` : ""}

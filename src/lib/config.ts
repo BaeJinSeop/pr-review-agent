@@ -41,6 +41,8 @@ export interface HistoryEntry {
   duplicateCount?: number;
   /** Earlier agent threads marked resolved because the fix was confirmed. */
   resolvedCount?: number;
+  /** Login whose agent review already existed at this commit, so this review was not posted. */
+  alreadyBy?: string;
 }
 
 export const DEFAULT_GUIDELINES = `- 버그, 보안, 성능, 장애 가능성을 우선 지적하고 스타일 취향은 지적하지 않는다.
