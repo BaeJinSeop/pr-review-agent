@@ -97,7 +97,8 @@ pub fn run() {
                 .build(app)?;
 
             // Ticker: the UI does the actual work when it receives "poll-tick".
-            // Driven from Rust so polling keeps running while the window is hidden.
+            // Driven from Rust so polling keeps running while the window is hidden
+            // (with backgroundThrottling disabled in tauri.conf.json, or WebKit suspends the hidden webview).
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut elapsed = 0u64;
