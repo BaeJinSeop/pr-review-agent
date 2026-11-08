@@ -1,86 +1,94 @@
 # 작업 메모 (맥락 이어가기용)
 
-마지막 갱신: 2026-11-06
+마지막 갱신: 2026-11-09
 
 ## 현재 상태
 
-- 최신 커밋 `a58253d`, `origin/main`까지 푸시됨(이 레포는 커밋 후 자동으로 푸시되고 있음, 원인 미확인). 버전은 아직 `0.1.1`(`4b247be`)이고,
-  그 뒤 운영 이슈 대응 커밋 4개가 올라감(아래 "운영 이슈 대응"). 릴리스 전에 버전을 0.1.2로 올릴지 결정 필요.
-- `v0.1.1` 태그는 아직 만들지 않음. 릴리스하려면:
-  ```bash
-  git tag v0.1.1 && git push origin v0.1.1
-  ```
-  `.github/workflows/release.yml`이 macOS universal DMG와 Windows 설치 파일을 빌드해 Draft Release로 올린다.
-- GitHub Releases에 v0.1.0이 아직 Draft로 남아 있음. v0.1.1 공개 시 삭제하거나 함께 공개할지 결정 필요.
+- 최신 릴리스 **v0.1.4** (2026-11-08, Latest). `origin/main` = `2adc6c7`(v0.1.4).
+- GitHub Releases: v0.1.4(Latest), v0.1.3, v0.1.0 모두 게시됨.
+  `v0.1.2` 태그는 원격에 있지만 Release는 없음(태그가 버전 0.1.1 커밋 `ad3456d`를 가리켜 workflow 실패). 그대로 둠.
+- 작업 위치: Orca 워크트리 `~/orca/workspaces/pr-review-agent/main`(브랜치 `feature/develop`), 푸시는 `git push origin HEAD:main`.
 - 앱 설정 파일: `~/Library/Application Support/com.intocns.prreviewagent/config.json`
-  (켜진 레포, 리뷰한 SHA, 실패 횟수, 이력).
+  (켜진 레포, 리뷰한 SHA, 실패 횟수, 이력, 월별 Claude 사용량).
 - 레포 위치: 2026-11-06에 `~/project/IntoProject/pr-review-agent` → `~/project/BaeJinseop/pr-review-agent`로 이동.
-  `~/.gitconfig`의 `includeIf "gitdir:~/project/BaeJinseop/"`로 이후 커밋은 개인 계정 BaeJinSeop, 통신은 개인 SSH 키.
+  `~/.gitconfig`의 `includeIf "gitdir:~/project/BaeJinseop/"`로 커밋은 개인 계정 BaeJinSeop, 통신은 개인 SSH 키.
   옛 경로는 새 경로를 가리키는 심볼릭 링크(Orca가 옛 경로로 등록돼 있고 경로 변경 CLI가 없음).
-  Orca 앱에서 새 경로로 다시 등록하면 링크 삭제. 원격 `js8ae/pr-review-agent`는 BaeJinSeop 레포로 리다이렉트됨.
+  Orca 앱에서 새 경로로 다시 등록하면 링크 삭제. 원격 `js8ae/pr-review-agent`는 BaeJinSeop 레포로 리다이렉트됨
+  (`gh -R`에는 `BaeJinSeop/pr-review-agent`).
 
-## v0.1.0 이후 변경 (v0.1.1에 포함)
+## 릴리스 방법
 
-- `686c9e9` 같은 PR 리뷰 동시 실행 방지(PR 단위 잠금, 버튼 비활성화).
-- `e4e6ced` 수정 확인된 이전 지적에 답글 + `resolveReviewThread`, 사람이 resolve한 스레드는 재지적 금지.
-- `a4e545f` Claude 응답 파싱 보강(다른 도구명, 문자열/중첩 input, 텍스트 JSON), 실패 시 응답 구조 표시.
-- `bf991dd` 리뷰 본문에 "수정 확인된 이전 지적" 섹션, 새 지적 0개여도 수정 확인 있으면 게시.
-- `ee56bec` 폴링 시 PR을 건너뛴 이유와 레포별 열린 PR 수를 로그에 남김.
+1. 버전을 5개 파일에서 올림: `package.json`, `package-lock.json`(2곳), `src-tauri/tauri.conf.json`,
+   `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`(pr-review-agent 항목). 커밋 메시지 `v0.1.x`.
+2. `git push origin HEAD:main && git tag v0.1.x && git push origin v0.1.x`
+3. `.github/workflows/release.yml`이 태그와 `tauri.conf.json` version이 같은지 검사한 뒤(다르면 실패),
+   macOS universal DMG + Windows exe/msi를 Draft Release로 올림(약 8분).
+4. `gh release edit v0.1.x -R BaeJinSeop/pr-review-agent --draft=false --latest`로 게시.
 
-## 운영 이슈 대응 (v0.1.1 이후)
+이미 올린 태그는 재사용하지 않고 다음 버전으로 올린다(v0.1.2 실패 → v0.1.3으로 해결한 방식).
+README의 릴리스 안내는 아직 `tauri.conf.json`만 언급함(5개 파일로 고칠 것).
 
-- `cf01b05` "새 PR/커밋 없음"인데 PR이 켜지 않은 레포에 있던 문제(예: Intocns/cloudSystemBatch#1):
-  리뷰 0개일 때 켜진 레포의 owner로 검색(`/search/issues` `user:<owner>`)해서 켜지 않은 레포의 열린 PR을
-  확인 로그 줄에 붙임(최대 5개). 검색 실패는 무시. `user:`는 조직에도 동작함을 `gh api`로 확인.
-- `5966d57` 레포를 켤 때 기존 열린 PR 건너뛰기(`skipExistingOnAdd` 기본 켜짐): 토스트에 "N개 지금 리뷰" 버튼(15초).
-  누르면 건너뜀 표시(`reviewed`)를 지우고 `runPoll` → base 브랜치/라벨/봇 규칙이 폴링과 동일하게 적용.
-  토스트를 놓치면 기존처럼 PR URL 수동 리뷰.
-- `beb902d` 강제 `tool_choice` 미지원 모델을 config `autoOnlyModels`에 저장(재시작해도 유지).
-  한계: 나중에 그 모델이 지원해도 계속 auto 모드(목록에서 지우려면 config.json 편집).
-- `cd511d7` Fine-grained PAT은 Resource owner 한 곳만 보임 → GitHub 제약이라 안내로 대응.
-  설정 화면/README에 "여러 owner면 Classic PAT(`repo`)", `github_pat_` 토큰으로 404가 나면 에러에 힌트 추가.
+## 버전별 변경
 
-앱 실행 검증(2026-11-06, `tauri dev`, 드라이런):
-- `cf01b05` 통과: 확인 로그에 `· 켜지 않은 레포의 열린 PR: Intocns/IntocnsAdmin#9 (...)` 표시.
-- `5966d57` 통과: 토스트 "1개 지금 리뷰" → "리뷰 대상으로 되돌림" → 바로 확인 → #9 드라이런 리뷰(코멘트 11개) 이력 기록.
-- `beb902d`, `cd511d7`은 앱에서 재현 불가(현재 모델은 강제 tool_choice 지원, 토큰이 Fine-grained 아님). tsc/빌드만 통과.
-- 검증 방법: `npx tauri dev --config '{"identifier":"com.intocns.prreviewagent.devcheck"}'`로 실제 설정과 분리
-  (키체인 토큰/키는 공유). 그 폴더의 `config.json`에 `dryRun: true`, `pollMinutes: 1`, 테스트 레포를 미리 넣고 실행.
-  터미널(Orca)에 손쉬운 사용 권한이 없어 클릭은 사람이 하고, 창 캡처는 `screencapture -l <창 id>`로 함.
+- **v0.1.1**: PR 단위 잠금, 수정 확인된 이전 지적 resolve, Claude 응답 파싱 보강,
+  "수정 확인된 이전 지적" 섹션, 폴링 때 건너뛴 이유 로그.
+- **v0.1.3** (2026-11-06):
+  - `cf01b05` 리뷰 0개일 때 켜지 않은 레포의 열린 PR을 확인 로그에 붙임(`/search/issues` `user:<owner>`, 최대 5개).
+  - `5966d57` 레포를 켤 때 기존 PR 건너뛰기(기본 켜짐) + 토스트 "N개 지금 리뷰" 버튼(15초).
+  - `beb902d` 강제 `tool_choice` 미지원 모델을 `autoOnlyModels`에 저장(나중에 지원돼도 계속 auto, 지우려면 config 편집).
+  - `cd511d7` Fine-grained PAT은 owner 한 곳만 보임 → 안내/에러 힌트로 대응.
+  - `6b55baf` 자동 확인 후 대시보드 "마지막 확인"이 갱신되지 않던 문제.
+  - `d7eeef9` 레포를 켜고 꺼도 "N개 활성" 숫자가 그대로이던 문제.
+- **v0.1.4** (2026-11-08): 아래 세 가지.
 
-남은 운영 메모:
-- "레포를 켤 때 기존 열린 PR 건너뛰기"는 비용 때문에 기본값 유지.
-- 화면 갱신 버그(검증 중 발견, 미수정):
-  - 대시보드 "마지막 확인"이 자동 확인 후에도 `-`로 남음. 다른 탭에 다녀와야 갱신(`renderHistory`만 다시 그림).
-  - 레포 탭에서 레포를 켜도 상단 "N개 활성" 숫자가 그대로(표를 다시 그리지 않음).
+## v0.1.4: 중복 리뷰 방지 (`3232e2f`)
 
-## 검토 중: 여러 사람이 동시에 돌릴 때 중복 리뷰 방지 (미구현)
+여러 사람이 같은 레포를 켜도 커밋당 에이전트 리뷰는 하나.
+- 판별: PR 리뷰 목록(`/pulls/{n}/reviews`)에서 `commit_id === head sha` 이고 본문이 `## 🤖 PR Review Agent`로 시작하면
+  누구 계정이든 이미 리뷰됨. 실제 PR(Intocns/IntovetCloudMobile-API#5)의 리뷰 데이터로 규칙 확인.
+- 리뷰 시작 전 확인 → 있으면 건너뜀(이력에 "OO님이 먼저 리뷰", `reviewed`에 기록).
+  Claude 호출 후 게시 직전 다시 확인 → 그 사이 누가 올렸으면 게시 안 함(드라이런은 생략).
+- PR URL 수동 리뷰는 이미 있으면 토스트에 "그래도 리뷰"(force).
+- 예전 설계의 "내 PR / 리뷰 요청된 PR만" 옵션은 넣지 않음: 작성자와 리뷰어가 둘 다 앱을 쓰면 그 옵션이 오히려 중복을 만듦.
+- 한계: 두 앱이 몇 초 차이로 동시에 게시하면 둘 다 올라갈 수 있음. 게시 직전에 밀린 쪽은 Claude 비용을 이미 씀.
+- 앱에서 직접 본 건 정상 흐름만. "이미 리뷰됨" 건너뜀/"그래도 리뷰" 토스트는 화면에서 아직 못 봄
+  (PR URL에 `https://github.com/Intocns/IntovetCloudMobile-API/pull/5` 넣고 리뷰하면 볼 수 있음).
 
-문제: 리뷰한 SHA 기록과 PR 잠금이 모두 각자 PC 로컬에 있어, 두 사람이 같은 레포를 켜면
-같은 커밋에 각자 계정으로 리뷰가 하나씩 달린다. 기존 "비슷한 코멘트 거르기"는 상대가
-게시를 끝낸 뒤에만 효과가 있고 동시 실행은 못 막는다.
+## v0.1.4: Claude 비용 표시 (`4545e09`)
 
-후보:
+- 응답의 `usage`(input/output 토큰)를 이력 각 줄에 `토큰 74.0k/5.7k · $0.411`로 표시.
+- 대시보드 "이번 달 Claude 비용 (추정)": config `monthlyUsage`("YYYY-MM" → 합계)에 누적. 이력을 지워도 남음.
+  파싱 실패한 응답도 과금되므로 파싱 전에 기록.
+- 가격표는 `src/lib/pricing.ts`(2026-10 정가, 캐시/배치 할인 없음). 표에 없는 모델은 "가격 미상", 토큰만 누적.
+  새 모델을 고르면 표에 한 줄 추가.
+- 검증: IntocnsAdmin#9 드라이런 리뷰 1회 = 입력 73,954 / 출력 5,742 토큰, $0.41 (claude-opus-5-5).
 
-1. **담당 나누기**: 각 앱이 "내가 작성한 PR" 또는 "나에게 리뷰 요청된 PR"만 자동 리뷰하는 옵션.
-   조율이 필요 없고 경쟁 상태도 없음. 앱 미설치자의 PR이 빠지는 빈틈은 레포별
-   "전체 리뷰 담당자" 설정으로 메움.
-2. **상태를 GitHub에 기록**: 리뷰 본문에 `<!-- pr-review-agent sha=<head sha> -->` 표식.
-   리뷰 시작 전 PR 리뷰 목록에서 같은 SHA 표식이 있으면 누가 게시했든 건너뜀.
-   거의 동시에 시작하면 둘 다 통과하는 한계(Claude 호출 수십 초 동안의 틈).
-3. **선점 코멘트**: 리뷰 전 `<!-- claim sha=... id=... -->` 코멘트를 달고 몇 초 뒤 재조회,
-   가장 먼저 달린 것(created_at, 같으면 id)만 진행하고 나머지는 자기 선점을 지우고 물러남.
-   완료 후 삭제, 10분 지난 선점은 무시. 폴링에 0~60초 무작위 지연 추가.
-   화면에 잠깐 코멘트가 보이는 단점.
-4. **실행 주체 일원화**: GitHub Actions(`concurrency: pr-${{ github.event.number }}`) 또는 GitHub App 서버.
-   구조적으로 한 번만 실행되고 봇 이름으로 게시됨. 대신 서버/시크릿 관리 필요.
+## v0.1.4: 창을 숨겨도 자동 확인 유지 (`6fa8d03`)
 
-추천: 팀 배포 단계에서는 **1번 기본 + 2번 안전장치**. 수동 리뷰 버튼은 같은 SHA 리뷰가 이미 있으면
-"이미 리뷰됨, 그래도 할까요?" 확인. 모두가 전체 PR을 리뷰해야 할 때만 3번, 사용자가 늘거나
-봇 계정이 필요해지면 4번으로 전환.
+- 원인: 확인 작업은 웹뷰(JS)에서 도는데, macOS WebKit이 숨겨지거나 가려진 웹뷰를 기본으로 일시정지시킴.
+  Rust 타이머가 `poll-tick`을 보내도 JS가 받지 못해, 창을 트레이로 보내면 자동 리뷰가 멈출 수 있었음.
+- 수정: `tauri.conf.json` 창 설정에 `"backgroundThrottling": "disabled"` (macOS 14+, Tauri 2.12).
+- 검증: 수정 전 창이 가려진 8분 동안 확인 0번 → 수정 후 창을 숨긴 7분 동안 매분 7번.
+- Windows는 이 설정을 지원하지 않음. Windows에서 창을 숨겨도 도는지는 미확인.
 
-## 그 밖의 다음 후보
+## 앱 실행 검증 방법
 
-- 리뷰 게시/critical 지적 시 macOS 알림.
+- `npx tauri dev --config '{"identifier":"com.intocns.prreviewagent.devcheck"}'`로 실제 설정과 분리(키체인 토큰/키는 공유).
+  먼저 `~/Library/Application Support/com.intocns.prreviewagent.devcheck/config.json`에
+  `{"settings":{"model":"claude-opus-5-5","pollMinutes":1,"dryRun":true},"repos":[...]}`를 넣고 실행. 끝나면 폴더 삭제.
+- 열린 PR이 없는 레포(예: `BaeJinSeop/pr-review-agent`)를 켜면 Claude 비용 없이 자동 확인만 볼 수 있음(`lastCheck` 갱신).
+- 터미널에 손쉬운 사용 권한이 없어 클릭은 사람이 함. 되는 것:
+  - 창 앞으로: `osascript -e 'tell application "System Events" to set frontmost of (first process whose unix id is <PID>) to true'`
+  - 창 숨기기: 같은 방식으로 `set visible of ... to false`
+  - 창 id: `CGWindowListCopyWindowInfo`(swift 스크립트), 캡처: `screencapture -x -o -l <창 id>`
+
+## 다음 후보 (2026-11-08 제안 목록 중 남은 것)
+
+- 앱 자동 업데이트(Tauri updater): 업데이트용 서명 키 + workflow 수정. Apple 서명 없이 가능.
+- 리뷰 품질: 변경 파일 전체(또는 주변 수십 줄) 맥락 제공(토큰 증가, 비용 표시로 확인하며 진행),
+  `maxDiffChars`(12만 자) 넘는 큰 PR을 파일 묶음으로 나눠 리뷰.
 - 에이전트 코멘트에 작성자가 답글 달면 재답변.
+- 리뷰 게시/critical 지적 시 macOS 알림.
+- 테스트(vitest): `annotatePatch`, 중복 지적 판별, `estimateUsd` 같은 순수 함수부터.
+- Actions Node 20 경고: `actions/checkout`, `actions/setup-node`를 v5로.
 - Developer ID 서명·공증(Apple Developer 가입 후 workflow에 추가).
