@@ -1,7 +1,7 @@
 # 태그(v0.1.0 등)를 푸시하면 macOS universal DMG와 Windows 설치 파일을 빌드해
 # 같은 이름의 GitHub Release(초안)에 올린다. 서명은 하지 않는다(macOS는 ad-hoc 서명).
 #
-#   1) src-tauri/tauri.conf.json 의 version 을 올리고 커밋
+#   1) 버전을 올리고 커밋 (package.json, package-lock.json, tauri.conf.json, Cargo.toml, Cargo.lock: README 참고)
 #   2) git tag v0.1.1 && git push origin v0.1.1
 #   3) Actions가 끝나면 Releases 탭에서 초안을 확인하고 Publish
 name: release

@@ -48,8 +48,10 @@ CI=true npm run tauri build   # .app + .dmg (CI=true: Finder 레이아웃 AppleS
 
 릴리스 만드는 법 (`.github/workflows/release.yml`):
 
-1. `src-tauri/tauri.conf.json`의 `version`을 올리고 커밋·푸시
-2. `git tag v<버전> && git push origin v<버전>` (태그와 version이 다르면 workflow가 실패함)
+1. 버전을 올리고 커밋·푸시: `package.json`, `package-lock.json`(2곳), `src-tauri/tauri.conf.json`,
+   `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`
+2. `git tag v<버전> && git push origin v<버전>`
+   (태그와 `tauri.conf.json`의 version이 다르면 workflow가 실패함. 실패한 태그는 재사용하지 말고 다음 버전으로)
 3. Actions가 끝나면 Releases의 초안을 확인하고 Publish
 
 ## 배포 메모
