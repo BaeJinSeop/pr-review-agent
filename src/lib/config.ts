@@ -13,6 +13,8 @@ export interface Settings {
   skipAuthors: string;
   /** Reply "fixed" and resolve the agent's own open threads the model judges fixed. */
   autoResolve: boolean;
+  /** Automatic reviews stop once this month's estimated cost reaches this (USD). 0 = no limit. */
+  monthlyBudgetUsd: number;
 }
 
 export interface RepoConfig {
@@ -71,6 +73,7 @@ export const DEFAULT_SETTINGS: Settings = {
   skipLabels: "skip-review, no-review",
   skipAuthors: "dependabot[bot], renovate[bot]",
   autoResolve: true,
+  monthlyBudgetUsd: 0,
 };
 
 const HISTORY_LIMIT = 300;

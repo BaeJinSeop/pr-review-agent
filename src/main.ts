@@ -36,8 +36,8 @@ function toast(msg: string, kind: "ok" | "err" = "ok", action?: { label: string;
 }
 
 const fmtTokens = (n: number) => (n < 1000 ? String(n) : n < 1e6 ? `${(n / 1e3).toFixed(1)}k` : `${(n / 1e6).toFixed(2)}M`);
-const fmtMonthUsage = (u: { input: number; output: number; usd: number }) =>
-  `약 $${u.usd.toFixed(2)} · 토큰 ${fmtTokens(u.input + u.output)}`;
+const fmtMonthUsage = (u: { input: number; output: number; usd: number }, budget: number) =>
+  `약 $${u.usd.toFixed(2)}${budget > 0 ? ` / 예산 $${budget}${u.usd >= budget ? " (도달, 자동 리뷰 멈춤)" : ""}` : ""} · 토큰 ${fmtTokens(u.input + u.output)}`;
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -94,7 +94,7 @@ async function renderDashboard() {
       <div><span class="label">활성 레포</span>${enabled}개</div>
       <div><span class="label">확인 주기</span>${settings.pollMinutes}분</div>
       <div><span class="label">마지막 확인</span><span id="last-check">${fmtTime(lastCheck)}</span></div>
-      <div><span class="label">이번 달 Claude 비용 (추정)</span><span id="month-usage">${fmtMonthUsage(month)}</span></div>
+      <div><span class="label">이번 달 Claude 비용 (추정)</span><span id="month-usage">${fmtMonthUsage(month, settings.monthlyBudgetUsd)}</span></div>
       <div><span class="label">모드</span>${settings.dryRun ? `<span class="warn">드라이런 (게시 안 함)</span>` : "PR에 코멘트 게시"}</div>
     </div>
     ${ready ? "" : `<p class="hint">설정 탭에서 토큰·API 키·모델을 저장하고, 레포 탭에서 대상 레포를 켜면 자동 리뷰가 시작됩니다.</p>`}
@@ -158,7 +158,7 @@ async function renderHistory() {
   const el = document.getElementById("history");
   if (!el) return;
   $("#last-check").textContent = fmtTime(await config.lastCheck());
-  $("#month-usage").textContent = fmtMonthUsage(await config.usageThisMonth());
+  $("#month-usage").textContent = fmtMonthUsage(await config.usageThisMonth(), (await config.settings()).monthlyBudgetUsd);
   const history = await config.history();
   if (history.length === 0) {
     el.innerHTML = `<p class="hint">아직 리뷰 이력이 없습니다.</p>`;
@@ -306,6 +306,10 @@ async function renderSettings() {
     <div class="grid2">
       <div class="field"><label>확인 주기 (분)</label><input type="number" id="poll" min="1" max="1440" value="${s.pollMinutes}" /></div>
       <div class="field"><label>최대 diff 크기 (문자)</label><input type="number" id="maxdiff" min="10000" step="10000" value="${s.maxDiffChars}" /></div>
+      <div class="field">
+        <label>월 예산 상한 (USD, 0이면 제한 없음)</label><input type="number" id="budget" min="0" step="1" value="${s.monthlyBudgetUsd}" />
+        <p class="hint">이번 달 추정 비용(이 PC 기준)이 닿으면 자동 리뷰를 멈춥니다. PR URL 수동 리뷰는 계속 됩니다.</p>
+      </div>
     </div>
     <label class="check"><input type="checkbox" id="dryrun" ${s.dryRun ? "checked" : ""} /> 드라이런: 리뷰만 생성하고 PR에 게시하지 않음 (이력에서 확인)</label>
     <label class="check"><input type="checkbox" id="skipexisting" ${s.skipExistingOnAdd ? "checked" : ""} /> 레포를 켤 때 이미 열려 있는 PR은 건너뛰고 새 커밋부터 리뷰</label>
@@ -391,6 +395,7 @@ async function renderSettings() {
       skipLabels: $<HTMLInputElement>("#skiplabels").value,
       skipAuthors: $<HTMLInputElement>("#skipauthors").value,
       autoResolve: $<HTMLInputElement>("#autoresolve").checked,
+      monthlyBudgetUsd: Math.max(0, Number($<HTMLInputElement>("#budget").value) || 0),
     };
     await config.saveSettings(next);
     await invoke("set_poll_interval", { minutes: next.pollMinutes });

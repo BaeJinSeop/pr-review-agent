@@ -447,6 +447,7 @@ export async function runPoll(log: LogFn): Promise<void> {
     const { gh } = await clients();
     const settings = await config.settings();
     let reviewedCount = 0;
+    let overBudget = 0;
     const counts: string[] = [];
     for (const repo of repos) {
       let pulls: GhPull[];
@@ -492,15 +493,26 @@ export async function runPoll(log: LogFn): Promise<void> {
           skip(`커밋 ${short(pr.head.sha)}에서 ${f.count}번 실패해 자동 재시도 중단. PR URL로 수동 리뷰하세요`);
           continue;
         }
+        // Checked per PR: each review adds to this month's cost. Manual review by URL is not limited.
+        const budget = settings.monthlyBudgetUsd;
+        const spent = budget > 0 ? (await config.usageThisMonth()).usd : 0;
+        if (budget > 0 && spent >= budget) {
+          overBudget++;
+          skip(`이번 달 추정 비용 $${spent.toFixed(2)}이 예산 $${budget}에 도달해 자동 리뷰 중단 (설정에서 예산을 올리거나 PR URL로 수동 리뷰)`);
+          continue;
+        }
         await reviewPull(repo.fullName, pr, log);
         reviewedCount++;
       }
     }
     const detail = ` (${counts.join(", ")})`;
+    const waiting = `예산 도달로 리뷰 대기 ${overBudget}개`;
     log(
       reviewedCount
-        ? `확인 완료: ${reviewedCount}개 리뷰${detail}`
-        : `확인 완료: 새 PR/커밋 없음${detail}${await otherRepoPulls(gh, repos.map((r) => r.fullName))}`,
+        ? `확인 완료: ${reviewedCount}개 리뷰${detail}${overBudget ? ` · ${waiting}` : ""}`
+        : overBudget
+          ? `확인 완료: ${waiting}${detail}`
+          : `확인 완료: 새 PR/커밋 없음${detail}${await otherRepoPulls(gh, repos.map((r) => r.fullName))}`,
     );
   } catch (e) {
     log(`확인 실패: ${e instanceof Error ? e.message : e}`);
