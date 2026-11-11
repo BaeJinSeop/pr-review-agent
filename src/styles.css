@@ -72,6 +72,7 @@ label.check { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
 .hist summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .hist .title { flex: 1; min-width: 200px; }
 .hist .meta { color: var(--muted); font-size: 12px; }
+.hist summary button.small { padding: 2px 8px; font-size: 12px; }
 .hist pre { white-space: pre-wrap; font-size: 12.5px; margin: 8px 0 2px; }
 .hist pre.err { color: var(--bad); }
 a { color: var(--accent); text-decoration: none; }

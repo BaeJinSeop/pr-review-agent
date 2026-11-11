@@ -118,38 +118,50 @@ async function renderDashboard() {
     if (btn.disabled) return;
     const parsed = parsePullUrl($<HTMLInputElement>("#pr-url").value);
     if (!parsed) return toast("PR URL 형식이 아닙니다.", "err");
-    const review = async (force: boolean) => {
-      btn.disabled = true;
-      btn.textContent = "리뷰 중...";
-      try {
-        const { gh } = await clients();
-        const pr = await gh.getPull(parsed.repo, parsed.number);
-        const r = await reviewPull(parsed.repo, pr, log, { full: true, force });
-        toast(
-          r.status === "error"
-            ? `실패: ${r.error}`
-            : r.alreadyBy
-              ? `${r.alreadyBy}님이 이 커밋을 이미 리뷰했습니다.`
-              : r.status === "skipped"
-                ? `건너뜀: ${r.summary}`
-                : "리뷰 완료",
-          r.status === "error" ? "err" : "ok",
-          r.alreadyBy ? { label: "그래도 리뷰", run: () => void review(true) } : undefined,
-        );
-      } catch (e) {
-        toast(errMsg(e), "err");
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "이 PR 리뷰";
-      }
-      await renderHistory();
-    };
-    await review(false);
+    btn.disabled = true;
+    btn.textContent = "리뷰 중...";
+    try {
+      await reviewManually(parsed.repo, parsed.number);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "이 PR 리뷰";
+    }
   };
   $("#clear-history").onclick = async () => {
     await config.clearHistory();
     await renderHistory();
   };
+  await renderHistory();
+}
+
+/** "owner/repo#n" under manual review, so history buttons stay "리뷰 중..." across re-renders (every log line re-renders). */
+const manualBusy = new Set<string>();
+
+/** Manual review (PR URL or history "다시 리뷰"): whole PR at its current head, not limited by retries or budget. */
+async function reviewManually(repo: string, number: number, force = false) {
+  const key = `${repo}#${number}`;
+  manualBusy.add(key);
+  await renderHistory();
+  try {
+    const { gh } = await clients();
+    const pr = await gh.getPull(repo, number);
+    const r = await reviewPull(repo, pr, log, { full: true, force });
+    toast(
+      r.status === "error"
+        ? `실패: ${r.error}`
+        : r.alreadyBy
+          ? `${r.alreadyBy}님이 이 커밋을 이미 리뷰했습니다.`
+          : r.status === "skipped"
+            ? `건너뜀: ${r.summary}`
+            : "리뷰 완료",
+      r.status === "error" ? "err" : "ok",
+      r.alreadyBy ? { label: "그래도 리뷰", run: () => void reviewManually(repo, number, true) } : undefined,
+    );
+  } catch (e) {
+    toast(errMsg(e), "err");
+  } finally {
+    manualBusy.delete(key);
+  }
   await renderHistory();
 }
 
@@ -166,20 +178,29 @@ async function renderHistory() {
   }
   const label = { posted: "게시됨", "dry-run": "드라이런", skipped: "건너뜀", error: "실패" } as const;
   el.innerHTML = history
-    .map(
-      (h) => `
+    .map((h, i) => {
+      const busy = manualBusy.has(`${h.repo}#${h.number}`);
+      return `
     <details class="card hist ${h.status}">
       <summary>
         <span class="badge ${h.status}">${label[h.status]}</span>
         <a href="#" data-href="${esc(h.url)}">${esc(h.repo)}#${h.number}</a>
         <span class="title">${esc(h.title)}</span>
         <span class="meta">${h.mode === "incremental" ? "증분 · " : ""}코멘트 ${h.commentCount}${h.duplicateCount ? ` (중복 ${h.duplicateCount} 생략)` : ""}${h.resolvedCount ? ` · 수정 확인 ${h.resolvedCount}` : ""}${h.alreadyBy ? ` · ${esc(h.alreadyBy)}님이 먼저 리뷰` : ""}${h.usage ? ` · 토큰 ${fmtTokens(h.usage.input)}/${fmtTokens(h.usage.output)} · ${h.usage.usd === null ? "가격 미상" : `$${h.usage.usd.toFixed(3)}`}` : ""} · ${esc(h.sha.slice(0, 7))} · ${fmtTime(h.time)}</span>
+        <button class="ghost small" data-rereview="${i}" title="이 PR의 현재 커밋을 전체 리뷰" ${busy ? "disabled" : ""}>${busy ? "리뷰 중..." : "다시 리뷰"}</button>
       </summary>
       ${h.error ? `<pre class="err">${esc(h.error)}</pre>` : ""}
       ${h.summary ? `<pre class="summary">${esc(h.summary)}</pre>` : ""}
-    </details>`,
-    )
+    </details>`;
+    })
     .join("");
+  el.onclick = (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-rereview]");
+    if (!b) return;
+    e.preventDefault(); // the button sits in <summary>: don't toggle the details
+    const h = history[Number(b.dataset.rereview)];
+    void reviewManually(h.repo, h.number);
+  };
 }
 
 // ---------- repos ----------
