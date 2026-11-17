@@ -1,4 +1,4 @@
-import { Claude, type ModelComment, type Severity } from "./claude";
+import { AnthropicError, Claude, type ModelComment, type Severity } from "./claude";
 import { config, type HistoryEntry, type Settings } from "./config";
 import { annotatePatch, prepareDiff, type PreparedDiff } from "./diff";
 import { GitHub, GitHubError, type GhFile, type GhPull, type GhThread, type ReviewComment } from "./github";
@@ -20,6 +20,21 @@ const MAX_ATTEMPTS = 3;
 const MAX_PRIOR_IN_PROMPT = 40;
 /** Resolved agent threads shown as "do not raise again" context. */
 const MAX_CLOSED_IN_PROMPT = 20;
+
+/** Errors that say nothing about the PR: the same commit can succeed later, and every other PR would fail the same way. */
+function isEnvironmentError(e: unknown): boolean {
+  // Tauri's http plugin rejects with a plain string on transport errors (offline, DNS, TLS, timeout).
+  if (typeof e === "string") return true;
+  if (e instanceof AnthropicError) {
+    // 401 key, 403 permission, 404 model gone, 429 rate limit, 5xx/529 outage, 400 out of credit.
+    return [401, 403, 404, 429].includes(e.status) || e.status >= 500 || /credit balance/i.test(e.message);
+  }
+  if (e instanceof GitHubError) {
+    // A 403 without "rate limit" (e.g. no write permission) stays counted: it repeats on every poll.
+    return e.status === 401 || e.status === 429 || e.status >= 500 || (e.status === 403 && /rate limit/i.test(e.message));
+  }
+  return false;
+}
 
 export async function clients(): Promise<{ gh: GitHub; claude: Claude }> {
   const [token, key] = await Promise.all([secrets.get("github_token"), secrets.get("anthropic_api_key")]);
@@ -391,8 +406,22 @@ async function reviewPullLocked(repo: string, pr: GhPull, log: LogFn, opts: Revi
     await config.markReviewed(key, pr.head.sha);
   } catch (e) {
     entry.error = e instanceof Error ? e.message : String(e);
-    await config.recordFailure(key, pr.head.sha);
-    log(`${key} 실패: ${entry.error}`);
+    // Once Claude was billed it counts regardless, so a failure after the call cannot cost money on every poll.
+    entry.retryable = !entry.usage && isEnvironmentError(e);
+    if (!entry.retryable) await config.recordFailure(key, pr.head.sha);
+    log(`${key} 실패: ${entry.error}${entry.retryable ? " (PR 문제가 아니라 자동 재시도 횟수에 넣지 않음)" : ""}`);
+    // An outage can last many polls: keep one history line for it instead of one per poll.
+    const last = (await config.history())[0];
+    if (
+      entry.retryable &&
+      last?.retryable &&
+      last.repo === repo &&
+      last.number === pr.number &&
+      last.sha === pr.head.sha &&
+      last.error === entry.error
+    ) {
+      return entry;
+    }
   }
   await config.addHistory(entry);
   return entry;
@@ -446,10 +475,12 @@ export async function runPoll(log: LogFn): Promise<void> {
     }
     const { gh } = await clients();
     const settings = await config.settings();
+    // Checked here, not per PR: without a model every PR would fail the same way.
+    if (!settings.model) throw new Error("Claude 모델이 선택되지 않았습니다 (설정 탭).");
     let reviewedCount = 0;
     let overBudget = 0;
     const counts: string[] = [];
-    for (const repo of repos) {
+    polling: for (const repo of repos) {
       let pulls: GhPull[];
       try {
         pulls = await gh.listOpenPulls(repo.fullName);
@@ -501,8 +532,12 @@ export async function runPoll(log: LogFn): Promise<void> {
           skip(`이번 달 추정 비용 $${spent.toFixed(2)}이 예산 $${budget}에 도달해 자동 리뷰 중단 (설정에서 예산을 올리거나 PR URL로 수동 리뷰)`);
           continue;
         }
-        await reviewPull(repo.fullName, pr, log);
+        const r = await reviewPull(repo.fullName, pr, log);
         reviewedCount++;
+        if (r.retryable) {
+          log("PR 문제가 아닌 오류라 이번 확인을 멈춤 (남은 PR은 다음 확인에서 다시 시도)");
+          break polling;
+        }
       }
     }
     const detail = ` (${counts.join(", ")})`;

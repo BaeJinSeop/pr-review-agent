@@ -54,6 +54,8 @@ export interface HistoryEntry {
   alreadyBy?: string;
   /** Claude tokens and estimated cost of this review. */
   usage?: Usage;
+  /** Failed for a reason outside the PR (key, credit, rate limit, outage, network): not counted as a retry. */
+  retryable?: boolean;
 }
 
 export const DEFAULT_GUIDELINES = `- 버그, 보안, 성능, 장애 가능성을 우선 지적하고 스타일 취향은 지적하지 않는다.
